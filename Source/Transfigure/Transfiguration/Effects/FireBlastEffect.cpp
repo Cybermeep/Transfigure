@@ -4,6 +4,9 @@
 #include "Character/TMCharacter.h"
 #include "Destruction/DestructionManager.h"
 #include "Kismet/GameplayStatics.h"
+#include "Enemy/BaseEnemy.h"
+#include "Engine/OverlapResult.h"
+#include "DrawDebugHelpers.h"
 #include "Components/DecalComponent.h"
 #include "Particles/ParticleSystemComponent.h"
 
@@ -23,28 +26,35 @@ void UFireBlastEffect::Execute(
 
     float ScaledDamage = GetScaledDamage(SpellData, Instigator);
 
-    // Apply damage to enemies.
-    // Was ApplyRadialDamage with radius = TriggerRadius and linear falloff to 0:
-    // the sigil fires when an enemy's capsule EDGE touches the trigger, so the
-    // enemy's centre is always just outside that radius and took 0 damage.
-    // Now: full damage inside the trigger radius, falling to half at 2x radius.
+    // Damage every living enemy in the blast, straight through TakePoolDamage
+    // (same approach as the grapple slam). The engine's ApplyRadialDamage was
+    // rejecting enemies on its line-of-sight check, so they took 0 damage.
+    // Full damage inside the trigger radius, falling to half at 2x radius.
     const float Inner = SpellData->TriggerRadius;
     const float Outer = SpellData->TriggerRadius * 2.f;
-    const bool bHitAnything = UGameplayStatics::ApplyRadialDamageWithFalloff(
-        World,
-        ScaledDamage,
-        ScaledDamage * 0.5f,     // minimum damage at the outer edge
-        Origin,
-        Inner,
-        Outer,
-        1.f,                     // linear falloff between inner and outer
-        UDamageType::StaticClass(),
-        TArray<AActor*>{},
-        Instigator,
-        nullptr);
 
-    UE_LOG(LogTemp, Warning, TEXT("[TM] FireBlast: %.0f damage, radius %.0f-%.0f, hit something: %d"),
-        ScaledDamage, Inner, Outer, bHitAnything ? 1 : 0);
+    TArray<FOverlapResult> Overlaps;
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(FireBlast), false, Instigator);
+    World->OverlapMultiByChannel(Overlaps, Origin, FQuat::Identity, ECC_Pawn,
+        FCollisionShape::MakeSphere(Outer), Params);
+
+    TSet<ABaseEnemy*> Hit;
+    for (const FOverlapResult& Overlap : Overlaps)
+    {
+        ABaseEnemy* Enemy = Cast<ABaseEnemy>(Overlap.GetActor());
+        if (!Enemy || !Enemy->IsAlive() || Hit.Contains(Enemy)) continue;
+        Hit.Add(Enemy);
+
+        const float Dist = FVector::Dist(Origin, Enemy->GetActorLocation());
+        const float Scale = FMath::GetMappedRangeValueClamped(FVector2D(Inner, Outer), FVector2D(1.f, 0.5f), Dist);
+        Enemy->TakePoolDamage(ScaledDamage * Scale, Origin);
+    }
+
+#if !UE_BUILD_SHIPPING
+    DrawDebugSphere(World, Origin, Outer, 16, FColor::Red, false, 0.5f, 0, 2.f);
+#endif
+    UE_LOG(LogTemp, Warning, TEXT("[TM] FireBlast: %.0f damage, radius %.0f-%.0f, hit %d enemies"),
+        ScaledDamage, Inner, Outer, Hit.Num());
 
     // Queue environmental destruction
     if (SpellData->bCausesEnvironmentalDestruction)
