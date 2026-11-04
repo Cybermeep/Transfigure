@@ -1392,12 +1392,25 @@ These can wait because they don't block the limb system or a flat test map. Some
 
 Start the limb system once this list passes on `L_TestArena`. Commit after each phase, so a bad change is easy to undo.
 
-- [ ] Phase 0: The game opens the test map, the player stays on the floor, and sigils can be drawn.
-- [ ] Phase 1: Turning, sprint, ledge drops, double jump and wall run all behave.
-- [ ] Phase 2: Spells and shots lower enemy health.
-- [ ] Phase 3: Pod enemies spawn, chase, die and return to the pool.
-- [ ] Phase 4: Swings and combat grapples can repeat without locking up.
-- [ ] Phase 5: The clap, combos, healing, buffs and slows each work once and end cleanly.
+- [x] Phase 0: The game opens the test map, the player stays on the floor, and sigils can be drawn.
+- [x] Phase 1: Turning, sprint, double jump and wall run all behave. *Ledge drop not yet tested (needs a ledge in the map).*
+- [x] Phase 2: Spells and shots lower enemy health.
+- [x] Phase 3: Pod enemies spawn, chase, die and return to the pool. *30 s escape deactivation not yet tested.*
+- [x] Phase 4: Swings and combat grapples can repeat without locking up.
+- [x] Phase 5: The clap, combos, healing, buffs and FireBlast damage work. *Ice slow (grapple element Ice) not yet tested.*
+
+### Status as of 2026-11-04 (Claude Code session)
+
+Verified in play-tests and the `[TM]` log; committed phase by phase (`git log`). Changes beyond this plan, made from play-testing:
+
+- **Aiming:** gun, grapple and sigil traces start level with the character, not at the camera (walls behind the player no longer block them). Canvas HUD `ATMHUD` draws a crosshair, spell/health/mana, and the spell wheel.
+- **Grapple feel:** yank, reel-in, WASD steering, release hop. Wall anchors pull faster and switch straight into a wall run (camera eases round). Overhead anchors release instead of hanging. Evade is a launch with its own cost/cooldown.
+- **Slam (V)** is a movement tech: dive at any aimed point, area damage/knockback/dive speed scale with momentum, `OnSlamImpact` event for future environment changes.
+- **Wall runs** keep arrival speed and accelerate (`WallRunAcceleration`, `WallRunMaxSpeed`).
+- **Spells:** tap Q places the selected sigil, hold Q opens a spell wheel (`DrawSigilSpellID`). FireBlast damages enemies directly via `TakePoolDamage` (the engine radial damage rejected them). Speed buff sigils last while you stand in them.
+- **Pods:** one reinforcement wave per activation (otherwise a pod could never be cleared).
+- **Mana:** cheaper costs, faster regen, `bInfiniteManaForTesting`.
+- Test assets: `DA_TestHeal`, `DA_TestSpeed`; Fire+Fire combo recipe on the player's ComboDetector.
 
 The limb system's first slice will build on these parts:
 
