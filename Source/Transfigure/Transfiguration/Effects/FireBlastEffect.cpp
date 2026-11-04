@@ -23,17 +23,28 @@ void UFireBlastEffect::Execute(
 
     float ScaledDamage = GetScaledDamage(SpellData, Instigator);
 
-    // Apply damage to enemies
-    UGameplayStatics::ApplyRadialDamage(
+    // Apply damage to enemies.
+    // Was ApplyRadialDamage with radius = TriggerRadius and linear falloff to 0:
+    // the sigil fires when an enemy's capsule EDGE touches the trigger, so the
+    // enemy's centre is always just outside that radius and took 0 damage.
+    // Now: full damage inside the trigger radius, falling to half at 2x radius.
+    const float Inner = SpellData->TriggerRadius;
+    const float Outer = SpellData->TriggerRadius * 2.f;
+    const bool bHitAnything = UGameplayStatics::ApplyRadialDamageWithFalloff(
         World,
         ScaledDamage,
+        ScaledDamage * 0.5f,     // minimum damage at the outer edge
         Origin,
-        SpellData->TriggerRadius,
+        Inner,
+        Outer,
+        1.f,                     // linear falloff between inner and outer
         UDamageType::StaticClass(),
         TArray<AActor*>{},
         Instigator,
-        nullptr,
-        /*bDoFullDamage=*/false);
+        nullptr);
+
+    UE_LOG(LogTemp, Warning, TEXT("[TM] FireBlast: %.0f damage, radius %.0f-%.0f, hit something: %d"),
+        ScaledDamage, Inner, Outer, bHitAnything ? 1 : 0);
 
     // Queue environmental destruction
     if (SpellData->bCausesEnvironmentalDestruction)

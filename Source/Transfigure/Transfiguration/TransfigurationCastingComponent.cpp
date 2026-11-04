@@ -77,8 +77,13 @@ bool UTransfigurationCastingComponent::PerformAimTrace(FHitResult& OutHit) const
     FCollisionQueryParams Params;
     Params.AddIgnoredActor(GetOwner());
 
-    return GetWorld()->LineTraceSingleByChannel(
-        OutHit, Start, TraceEnd, ECC_WorldStatic, Params);
+    // Only level geometry (static and dynamic objects), never characters, so a
+    // sigil can't land on an enemy's capsule in mid-air.
+    FCollisionObjectQueryParams Objects;
+    Objects.AddObjectTypesToQuery(ECC_WorldStatic);
+    Objects.AddObjectTypesToQuery(ECC_WorldDynamic);
+
+    return GetWorld()->LineTraceSingleByObjectType(OutHit, Start, TraceEnd, Objects, Params);
 }
 
 bool UTransfigurationCastingComponent::CanAffordSpell(FName SpellID) const
