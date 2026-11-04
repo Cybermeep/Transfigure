@@ -39,6 +39,10 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Enemy|Combat")
     virtual void TakePoolDamage(float DamageAmount, FVector HitLocation);
 
+    /** Engine damage (ApplyDamage / ApplyRadialDamage / ApplyPointDamage) is routed into TakePoolDamage. */
+    virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent,
+        AController* EventInstigator, AActor* DamageCauser) override;
+
     UFUNCTION(BlueprintCallable, Category = "Enemy|Combat")
     bool IsAlive() const { return bIsAlive; }
 

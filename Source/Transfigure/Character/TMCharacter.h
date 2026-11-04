@@ -15,6 +15,7 @@ class UTransfigurationCastingComponent;
 class UTransfigurationComboDetector;
 class UBuffEffectComponent;
 class UGrappleComponent;
+class UWeaponComponent;
 
 UCLASS()
 class TRANSFIGURE_API ATMCharacter : public ACharacter
@@ -239,6 +240,10 @@ public:
     UFUNCTION(BlueprintCallable, Category = "TM|Magic|Buffs")
     void ApplyDamageBuff(float Multiplier, float Duration);
 
+    /** Current damage buff multiplier (1 = no buff). Used by the gun and spells. */
+    UFUNCTION(BlueprintPure, Category = "TM|Magic|Buffs")
+    float GetDamageMultiplier() const { return CurrentDamageMultiplier; }
+
     UFUNCTION(BlueprintCallable, Category = "TM|Magic|Buffs")
     float GetHealth() const { return Health; }
 
@@ -297,6 +302,9 @@ public:
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Grapple")
     TObjectPtr<UGrappleComponent> GrappleComponent;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat")
+    TObjectPtr<UWeaponComponent> WeaponComponent;
 
     // ── STATE MANAGEMENT ──
     void SetStateName(const FString& Name) { CurrentStateName = Name; }
@@ -407,6 +415,7 @@ private:
     void OnGrappleEvadePressed();
     void OnGrapplePullPressed();
     void OnWebTrapPressed();
+    void OnFirePressed();
 
     // ── MANA SYSTEM ──
     FTimerHandle ManaRegenDelayHandle;

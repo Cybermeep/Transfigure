@@ -18,6 +18,7 @@
 #include "Transfiguration/TransfigurationComboDetector.h"
 #include "Transfiguration/BuffEffectComponent.h"
 #include "Grapple/GrappleComponent.h"
+#include "Combat/WeaponComponent.h"
 #include "Destruction/DestructionManager.h"
 #include "Kismet/GameplayStatics.h"
 #include "TimerManager.h"
@@ -44,6 +45,8 @@ ATMCharacter::ATMCharacter()
         TEXT("ComboDetector"));
     GrappleComponent = CreateDefaultSubobject<UGrappleComponent>(
         TEXT("GrappleComponent"));
+    WeaponComponent = CreateDefaultSubobject<UWeaponComponent>(
+        TEXT("WeaponComponent"));
 }
 
 void ATMCharacter::BeginPlay()
@@ -224,6 +227,12 @@ void ATMCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
     EIC->BindAction(IA_GrappleEvade, ETriggerEvent::Started, this, &ATMCharacter::OnGrappleEvadePressed);
     EIC->BindAction(IA_GrapplePull, ETriggerEvent::Started, this, &ATMCharacter::OnGrapplePullPressed);
     EIC->BindAction(IA_WebTrap, ETriggerEvent::Started, this, &ATMCharacter::OnWebTrapPressed);
+
+    // Combat Inputs
+    if (IA_Fire)
+    {
+        EIC->BindAction(IA_Fire, ETriggerEvent::Started, this, &ATMCharacter::OnFirePressed);
+    }
 }
 
 // ── MOVEMENT INPUT HANDLERS ──
@@ -270,6 +279,13 @@ void ATMCharacter::OnJumpPressed()
     }
 }
 
+
+// ── COMBAT INPUT HANDLERS ──
+
+void ATMCharacter::OnFirePressed()
+{
+    if (WeaponComponent) WeaponComponent->FireWeapon();
+}
 
 // ── MAGIC INPUT HANDLERS ──
 

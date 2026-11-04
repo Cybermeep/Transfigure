@@ -5,11 +5,13 @@
 #include "Character/TMCharacter.h"
 #include "Enemy/BaseEnemy.h"
 #include "Kismet/GameplayStatics.h"
+#include "DrawDebugHelpers.h"
+#include "Transfigure.h"
 
 UWeaponComponent::UWeaponComponent()
 {
     PrimaryComponentTick.bCanEverTick = true;
-    PrimaryComponentTick.TickInterval = 0.1f;
+    // Ticks every frame so the debug aim marker doesn't flicker.
 
     // Default elemental multipliers
     ElementalDamageMultipliers.Add(ETransfigurationElement::Fire, 1.2f);
@@ -30,47 +32,95 @@ void UWeaponComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 {
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
     UpdateInfusion(DeltaTime);
+
+#if !UE_BUILD_SHIPPING
+    // Debug aim marker until there is a crosshair: green on an enemy, white elsewhere.
+    if (OwnerCharacter && OwnerCharacter->IsLocallyControlled())
+    {
+        FHitResult Hit;
+        FVector Start, End;
+        if (TraceAim(Hit, Start, End))
+        {
+            const bool bEnemy = Cast<ABaseEnemy>(Hit.GetActor()) != nullptr;
+            DrawDebugSphere(GetWorld(), Hit.ImpactPoint, bEnemy ? 12.f : 6.f, 8,
+                bEnemy ? FColor::Green : FColor::White, false, -1.f, 0, 1.5f);
+        }
+    }
+#endif
 }
 
-// ── BUG 4 FIX: Renamed from OnWeaponHit to ProcessHit ──
-void UWeaponComponent::ProcessHit(FHitResult Hit, bool bWasHeadshot, bool bWasKill)
+bool UWeaponComponent::TraceAim(FHitResult& OutHit, FVector& OutStart, FVector& OutEnd) const
+{
+    if (!OwnerCharacter || !OwnerCharacter->GetController()) return false;
+
+    FVector CamLoc;
+    FRotator CamRot;
+    OwnerCharacter->GetController()->GetPlayerViewPoint(CamLoc, CamRot);
+    const FVector Dir = CamRot.Vector();
+
+    // Move the start forward along the view ray to the point level with the
+    // character, so nothing behind the player can block the shot.
+    const float ToCharacter = FVector::DotProduct(OwnerCharacter->GetActorLocation() - CamLoc, Dir);
+    OutStart = CamLoc + Dir * FMath::Max(ToCharacter, 0.f);
+    OutEnd = CamLoc + Dir * MaxRange;
+
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(WeaponFire), false, OwnerCharacter);
+    return GetWorld()->LineTraceSingleByChannel(OutHit, OutStart, OutEnd, ECC_Weapon, Params);
+}
+
+bool UWeaponComponent::FireWeapon()
+{
+    FHitResult Hit;
+    FVector Start, End;
+    const bool bHit = TraceAim(Hit, Start, End);
+
+#if !UE_BUILD_SHIPPING
+    // Stand-in for a gun model and tracer: line from the player to the impact.
+    DrawDebugLine(GetWorld(), OwnerCharacter->GetActorLocation(), bHit ? Hit.ImpactPoint : End,
+        FColor::Yellow, false, 0.5f, 0, 1.5f);
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Fire: %s"), bHit ? *GetNameSafe(Hit.GetActor()) : TEXT("miss"));
+#endif
+
+    if (bHit) ProcessHit(Hit, BaseDamage);
+    return bHit;
+}
+
+void UWeaponComponent::ProcessHit(const FHitResult& Hit, float HitDamage)
 {
     if (!OwnerCharacter) return;
 
-    FWeaponHitInfo HitInfo;
-    HitInfo.HitLocation = Hit.ImpactPoint;
-    HitInfo.HitActor = Hit.GetActor();
-    HitInfo.bWasHeadshot = bWasHeadshot;
-    HitInfo.bWasKill = bWasKill;
+    ABaseEnemy* Enemy = Cast<ABaseEnemy>(Hit.GetActor());
+    if (!Enemy || !Enemy->IsAlive()) return;
 
-    // Calculate mana reward
-    float ManaToAdd = 0.0f;
+    // Headshots need per-bone hits, which arrive with the limb system.
+    const bool bHeadshot = Hit.BoneName == HeadBoneName;
+    float Damage = HitDamage * OwnerCharacter->GetDamageMultiplier();
+    if (bHeadshot) Damage *= HeadshotMultiplier;
 
-    if (bWasKill)
+    if (bIsInfused)
     {
-        ManaToAdd = ManaPerKill;
-        if (bWasHeadshot)
-            ManaToAdd += ManaPerHeadshot;
-
-        OnWeaponKill.Broadcast(Hit.GetActor());
-    }
-    else
-    {
-        ManaToAdd = ManaPerHit;
-        if (bWasHeadshot)
-            ManaToAdd += (ManaPerHeadshot - ManaPerHit); // Headshot bonus on non-kill
+        if (const float* Multiplier = ElementalDamageMultipliers.Find(CurrentInfusion))
+        {
+            Damage *= *Multiplier;
+        }
     }
 
+    Enemy->TakePoolDamage(Damage, Hit.ImpactPoint);
+    const bool bKill = !Enemy->IsAlive();
+
+    float ManaToAdd = bKill ? ManaPerKill : ManaPerHit;
+    if (bHeadshot) ManaToAdd += ManaPerHeadshot;
     OwnerCharacter->AddMana(ManaToAdd);
 
-    // Apply elemental damage if infused
-    if (bIsInfused && Hit.GetActor())
-    {
-        ApplyElementalDamage(Hit.GetActor(), Hit, HitInfo.DamageDealt);
-    }
-
-    // Broadcast to Blueprint listeners
+    FWeaponHitInfo HitInfo;
+    HitInfo.HitLocation = Hit.ImpactPoint;
+    HitInfo.HitActor = Enemy;
+    HitInfo.bWasHeadshot = bHeadshot;
+    HitInfo.bWasKill = bKill;
+    HitInfo.DamageDealt = Damage;
     OnWeaponHit.Broadcast(HitInfo);
+
+    if (bKill) OnWeaponKill.Broadcast(Enemy);
 }
 
 void UWeaponComponent::OnMeleeKill(AActor* Target)
@@ -114,126 +164,11 @@ void UWeaponComponent::UpdateInfusion(float DeltaTime)
         OnInfusionExpired();
     }
 }
-//basic version until i create the status effect infrastructure
-void UWeaponComponent::ApplyElementalDamage(AActor* Target, const FHitResult& Hit, float InBaseDamage)
-{
-    ABaseEnemy* Enemy = Cast<ABaseEnemy>(Target);
-    if (!Enemy) return;
-
-    float DamageMultiplier = 1.0f;
-    if (ElementalDamageMultipliers.Contains(CurrentInfusion))
-    {
-        DamageMultiplier = ElementalDamageMultipliers[CurrentInfusion];
-    }
-
-    float TotalDamage = InBaseDamage * DamageMultiplier;
-    Enemy->TakePoolDamage(TotalDamage, Hit.ImpactPoint);
-}
-
 void UWeaponComponent::OnInfusionExpired()
 {
+    bIsInfused = false;
+    InfusionTimeRemaining = 0.f;
     CurrentInfusion = ETransfigurationElement::None;
     GetWorld()->GetTimerManager().ClearTimer(InfusionTimerHandle);
     UE_LOG(LogTemp, Verbose, TEXT("WeaponComponent: Infusion expired"));
 }
-/*
-void UWeaponComponent::ApplyElementalDamage(AActor* Target, const FHitResult& Hit, float InBaseDamage)
-{
-    ABaseEnemy* Enemy = Cast<ABaseEnemy>(Target);
-    if (!Enemy) return;
-
-    float DamageMultiplier = 1.0f;
-    if (ElementalDamageMultipliers.Contains(CurrentInfusion))
-    {
-        DamageMultiplier = ElementalDamageMultipliers[CurrentInfusion];
-    }
-
-    float TotalDamage = InBaseDamage * DamageMultiplier;
-
-    switch (CurrentInfusion)
-    {
-    case ETransfigurationElement::Fire:
-        // 3-second burning DoT: 10 damage/sec
-        Enemy->ApplyStatusEffect(EStatusEffect::Burning, 3.0f, 10.0f);
-        break;
-
-    case ETransfigurationElement::Ice:
-        // Slow to 40% movement speed for 2 seconds
-        Enemy->ApplyStatusEffect(EStatusEffect::Slowed, 2.0f, 0.4f);
-        break;
-
-    case ETransfigurationElement::Lightning:
-        // 0.5s stun, then chain 50% damage to nearest enemy within 300 units
-        Enemy->ApplyStatusEffect(EStatusEffect::Stunned, 0.5f, 0.0f);
-        if (OwnerCharacter)
-        {
-            TArray<FOverlapResult> Overlaps;
-            FCollisionQueryParams Params;
-            Params.AddIgnoredActor(OwnerCharacter);
-            Params.AddIgnoredActor(Target);
-            GetWorld()->OverlapMultiByChannel(
-                Overlaps,
-                Hit.ImpactPoint,
-                FQuat::Identity,
-                ECC_Pawn,
-                FCollisionShape::MakeSphere(300.f),
-                Params);
-
-            for (const FOverlapResult& Overlap : Overlaps)
-            {
-                ABaseEnemy* ChainTarget = Cast<ABaseEnemy>(Overlap.GetActor());
-                if (ChainTarget)
-                {
-                    ChainTarget->TakePoolDamage(TotalDamage * 0.5f, Hit.ImpactPoint);
-                    break; // Chain to first valid target only
-                }
-            }
-        }
-        break;
-
-    case ETransfigurationElement::Void:
-        // Strip enemy buffs, return 5 mana to player
-        Enemy->ClearAllBuffs();
-        if (OwnerCharacter) OwnerCharacter->AddMana(5.0f);
-        break;
-
-    case ETransfigurationElement::Earth:
-        // Knockback 400 units with upward component
-    {
-        FVector KnockDir = (Target->GetActorLocation() -
-            OwnerCharacter->GetActorLocation()).GetSafeNormal();
-        KnockDir.Z = 0.4f; // Upward kick
-        KnockDir.Normalize();
-        Enemy->LaunchCharacter(KnockDir * 400.f, true, true);
-    }
-    break;
-
-    case ETransfigurationElement::Arcane:
-        // Mark enemy — next sigil within proximity deals 3x damage
-        Enemy->ApplyStatusEffect(EStatusEffect::SigilMarked, 8.0f, 3.0f);
-        break;
-
-    default:
-        break;
-    }
-
-    Enemy->TakePoolDamage(TotalDamage, Hit.ImpactPoint);
-}
-*/
-/*
-void UWeaponComponent::InfuseWeaponWithElement(ETransfigurationElement Element)
-{
-    bIsInfused = true;
-    CurrentInfusion = Element;
-    InfusionTimeRemaining = ElementalInfusionDuration;
-
-    GetWorld()->GetTimerManager().ClearTimer(InfusionTimerHandle);
-    GetWorld()->GetTimerManager().SetTimer(
-        InfusionTimerHandle,
-        this, &UWeaponComponent::OnInfusionExpired,
-        ElementalInfusionDuration,
-        false);
-
-    UE_LOG(LogTemp, Verbose, TEXT("WeaponComponent: Infused with element %d"), (int32)Element);
-}
-*/

@@ -4,6 +4,7 @@
 #include "Enemy/EnemyObjectPool.h"
 #include "Components/WidgetComponent.h"
 #include "Kismet/GameplayStatics.h"
+#include "Engine/DamageEvents.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "RingWorldGeometry.h"
 #include "RingWorldSettings.h"
@@ -92,6 +93,28 @@ void ABaseEnemy::OnReturnToPool()
     UE_LOG(LogTemp, Verbose, TEXT("BaseEnemy: Returned to pool"));
 }
 
+// All engine damage funnels into TakePoolDamage, so there is exactly one
+// place that changes enemy health (the limb system will hook in there).
+float ABaseEnemy::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent,
+    AController* EventInstigator, AActor* DamageCauser)
+{
+    const float Applied = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
+    if (Applied <= 0.f) return 0.f;
+
+    FVector HitLocation = GetActorLocation();
+    if (DamageEvent.IsOfType(FPointDamageEvent::ClassID))
+    {
+        HitLocation = static_cast<const FPointDamageEvent&>(DamageEvent).HitInfo.ImpactPoint;
+    }
+    else if (DamageEvent.IsOfType(FRadialDamageEvent::ClassID))
+    {
+        HitLocation = static_cast<const FRadialDamageEvent&>(DamageEvent).Origin;
+    }
+
+    TakePoolDamage(Applied, HitLocation);
+    return Applied;
+}
+
 void ABaseEnemy::TakePoolDamage(float DamageAmount, FVector HitLocation)
 {
     if (!bIsAlive) return;
@@ -99,6 +122,8 @@ void ABaseEnemy::TakePoolDamage(float DamageAmount, FVector HitLocation)
     Health -= DamageAmount;
     CurrentState = EEnemyState::Combat;
     OnDamageEffects(HitLocation);
+    UE_LOG(LogTemp, Warning, TEXT("[TM] %s took %.1f damage, health %.1f / %.1f"),
+        *GetName(), DamageAmount, Health, MaxHealth);
 
     if (Health <= 0.0f)
     {

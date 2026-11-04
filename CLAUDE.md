@@ -10,6 +10,7 @@ GitHub: Cybermeep/Transfigure. The owner is not a C++ expert: explain fixes plai
 ```
 
 - After changing any header, USTRUCT or UCLASS: full build like this with the editor closed. Never rely on Live Coding for those.
+- Build.bat fails (exit code 6) while the editor is open. Ask the owner to close it, and tell them to wait for "build succeeded" before reopening — otherwise they test the previous DLL.
 - Check `Binaries/Win64/UnrealEditor-Transfigure.dll` is newer than the edited source. If the build fails, the editor silently keeps running the OLD dll, so in-game behaviour won't reflect the code.
 
 ## Logs

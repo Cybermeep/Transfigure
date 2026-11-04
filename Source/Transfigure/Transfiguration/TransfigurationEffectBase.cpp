@@ -33,14 +33,21 @@ void UTransfigurationEffectBase::RestoreInstigatorVelocity(AActor* Instigator)
 
 float UTransfigurationEffectBase::GetScaledDamage(UTransfigurationDefinition* SpellData, AActor* Instigator) const
 {
-    if (!SpellData || !SpellData->bScalesWithSpeed || !Instigator)
-        return SpellData ? SpellData->BaseDamage : 0.f;
+    if (!SpellData) return 0.f;
 
-    ATMCharacter* TMChar = Cast<ATMCharacter>(Instigator);
-    if (!TMChar) return SpellData->BaseDamage;
+    // Spells read the same damage buff as the gun, plus optional speed scaling.
+    const ATMCharacter* TMChar = Cast<ATMCharacter>(Instigator);
+    float Damage = SpellData->BaseDamage;
 
-    float ScaleFactor = TMChar->GetSpeedScalingFactor();
-    return SpellData->BaseDamage * ScaleFactor;
+    if (TMChar)
+    {
+        Damage *= TMChar->GetDamageMultiplier();
+        if (SpellData->bScalesWithSpeed)
+        {
+            Damage *= TMChar->GetSpeedScalingFactor();
+        }
+    }
+    return Damage;
 }
 
 float UTransfigurationEffectBase::GetScaledCooldown(UTransfigurationDefinition* SpellData, AActor* Instigator) const

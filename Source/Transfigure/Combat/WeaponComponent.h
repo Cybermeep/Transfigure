@@ -77,11 +77,26 @@ public:
     UPROPERTY(BlueprintAssignable)
     FOnWeaponKill OnWeaponKill;
 
-    // ── BUG 4 FIX: Renamed from OnWeaponHit to ProcessHit ──
-    // Previously this UFUNCTION had the same name as the delegate property above,
-    // causing a compile error. Call ProcessHit() from your weapon fire logic.
+    // Hitscan settings
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon")
+    float BaseDamage = 25.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon")
+    float MaxRange = 10000.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon")
+    float HeadshotMultiplier = 2.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon")
+    FName HeadBoneName = TEXT("head");
+
+    /** Traces from the camera along the view direction. Returns true if something was hit. */
     UFUNCTION(BlueprintCallable, Category = "Weapon")
-    void ProcessHit(FHitResult Hit, bool bWasHeadshot, bool bWasKill);
+    bool FireWeapon();
+
+    /** Works out damage (buffs, headshot, infusion), applies it via TakePoolDamage, rewards mana and broadcasts. */
+    UFUNCTION(BlueprintCallable, Category = "Weapon")
+    void ProcessHit(const FHitResult& Hit, float HitDamage);
 
     UFUNCTION(BlueprintCallable, Category = "Weapon")
     void OnMeleeKill(AActor* Target);
@@ -120,10 +135,15 @@ private:
     FTimerHandle InfusionTimerHandle;
 
     UFUNCTION()
-    void ApplyElementalDamage(AActor* Target, const FHitResult& Hit, float InBaseDamage);
-
-    UFUNCTION()
     void UpdateInfusion(float DeltaTime);
+
+    /**
+     * Line trace along the camera's view, but starting level with the
+     * character instead of at the camera. A third-person camera sits behind
+     * the player, so starting there would hit walls/objects between the
+     * camera and the player (e.g. the wall you're running on).
+     */
+    bool TraceAim(FHitResult& OutHit, FVector& OutStart, FVector& OutEnd) const;
 
     UFUNCTION()
     void OnInfusionExpired();
