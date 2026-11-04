@@ -36,6 +36,8 @@ Never edit `.uasset` / `.umap` as text. Inspect with Python, then give the owner
 - `Ringworld/` — spin axis world +Y, ring in XZ. `URingWorldGeometry`, `URingFrameUtils`, `FRingWorldSpec` in `URingWorldSettings` (`Config/DefaultGame.ini`). `bFlatWorldForTesting=True` makes gravity -Z for flat test maps.
 - `Character/` `ATMCharacter` + `StateMachine/`, `States/TMState_*`. Actor yaw and camera pitch are driven in `UpdateRingGravity`, NOT by ControlRotation.
 - `Enemy/`, `Grapple/`, `Transfiguration/` (spells/sigils), `Temporal/`, `Combat/`.
+- `Limb/` — procedural limb system. `FLimbMeshGenerator` (math-generated parts), `AProceduralZombie` (parts on a hidden UE5 Mannequin skeleton, capsule hit zones, severing through `TakePoolDamage`, ragdoll corpses), `ASeveredLimb` (physics limb on ring gravity). Needs the Mannequin in `/Game/Characters/Mannequins`.
+- `Character/TMHUD` — placeholder canvas HUD (crosshair, status, hold-Q spell wheel).
 - `Destruction/` — known non-functional; leave it (`ChunkPoolSize = 0`).
 - Test map: `/Game/Maps/L_TestArena`. Placeholder assets only (cubes, engine shapes, UE5 Mannequin).
 
