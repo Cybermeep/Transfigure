@@ -14,20 +14,22 @@
 #include "NavigationSystem.h"
 #include "AIController.h"
 #include "RingFrameUtils.h"
+#include "EngineUtils.h"
 
 AEnemyPod::AEnemyPod()
 {
     PrimaryActorTick.bCanEverTick = true;
 
     ActivationTrigger = CreateDefaultSubobject<USphereComponent>(TEXT("ActivationTrigger"));
-    ActivationTrigger->SetupAttachment(RootComponent);
+    // Was SetupAttachment(RootComponent) -- there is no root yet, so make the trigger the root.
+    SetRootComponent(ActivationTrigger);
     ActivationTrigger->SetSphereRadius(ActivationRadius);
     ActivationTrigger->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
     ActivationTrigger->SetCollisionResponseToAllChannels(ECR_Ignore);
     ActivationTrigger->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
 
     PodVolume = CreateDefaultSubobject<UBoxComponent>(TEXT("PodVolume"));
-    PodVolume->SetupAttachment(RootComponent);
+    PodVolume->SetupAttachment(ActivationTrigger);
     PodVolume->SetBoxExtent(FVector(1000, 1000, 500));
     PodVolume->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
     PodVolume->SetCollisionResponseToAllChannels(ECR_Ignore);
@@ -37,6 +39,15 @@ AEnemyPod::AEnemyPod()
 void AEnemyPod::BeginPlay()
 {
     Super::BeginPlay();
+
+    if (StartupEnemyPool)
+    {
+        InitializePod(StartupEnemyPool, StartupPodID >= 0 ? StartupPodID : (int32)GetUniqueID());
+    }
+    else
+    {
+        UE_LOG(LogTemp, Warning, TEXT("EnemyPod %s: no Startup Enemy Pool set - it will never spawn"), *GetName());
+    }
 
     ActivationTrigger->OnComponentBeginOverlap.AddDynamic(this, &AEnemyPod::OnActivationOverlap);
     ActivationTrigger->OnComponentEndOverlap.AddDynamic(this, &AEnemyPod::OnActivationEndOverlap);
@@ -53,12 +64,13 @@ void AEnemyPod::BeginPlay()
         // Create default spawn points around the pod
         for (int32 i = 0; i < 8; i++)
         {
-            float Angle = (360.0f / 8) * i;
-            FVector Offset = FVector(
-                FMath::Cos(FMath::DegreesToRadians(Angle)) * 500,
-                FMath::Sin(FMath::DegreesToRadians(Angle)) * 500,
-                0
-            );
+            const float Angle = (360.0f / 8) * i;
+            // Circle in the local ground plane (works on the ring, not just flat maps).
+            const FVector Up = URingFrameUtils::GetUpFor(this);
+            const FVector Tangent = FVector::VectorPlaneProject(GetActorForwardVector(), Up).GetSafeNormal();
+            const FVector Bitangent = FVector::CrossProduct(Up, Tangent);
+            const float Radians = FMath::DegreesToRadians(Angle);
+            const FVector Offset = (Tangent * FMath::Cos(Radians) + Bitangent * FMath::Sin(Radians)) * 500.f;
 
             FEnemySpawnPoint SpawnPoint;
             SpawnPoint.Location = GetActorLocation() + Offset;
@@ -69,23 +81,14 @@ void AEnemyPod::BeginPlay()
         }
     }
 
-    UE_LOG(LogTemp, Log, TEXT("EnemyPod %d: Initialized with %d spawn points"), PodID, SpawnPoints.Num());
+    UE_LOG(LogTemp, Warning, TEXT("[TM] EnemyPod %d: Initialized with %d spawn points, pool=%s"),
+        PodID, SpawnPoints.Num(), *GetNameSafe(EnemyPool));
 }
 
 void AEnemyPod::Tick(float DeltaTime)
 {
+    // Engagement timing lives in CheckEscapeConditions (1s timer).
     Super::Tick(DeltaTime);
-
-    if (CurrentState == EPodState::Active && CurrentEnemyCount > 0)
-    {
-        TimeSinceLastEngagement += DeltaTime;
-
-        // Update enemy awareness based on destruction
-        if (bUsesCoverFromDestruction && (int32)(TimeSinceLastEngagement) % 5 == 0)
-        {
-            UpdateEnemyCoverPositions();
-        }
-    }
 }
 
 void AEnemyPod::InitializePod(AEnemyObjectPool* InEnemyPool, int32 InPodID)
@@ -103,7 +106,9 @@ void AEnemyPod::ActivatePod()
 {
     if (CurrentState != EPodState::Inactive) return;
 
-    UE_LOG(LogTemp, Log, TEXT("EnemyPod %d: Activating"), PodID);
+    UE_LOG(LogTemp, Warning, TEXT("[TM] EnemyPod %d: Activating"), PodID);
+    bHasReinforced = false;
+    bEscapeCounted = false;
     TransitionToState(EPodState::Spawning);
     SpawnPodEnemies();
 }
@@ -112,7 +117,12 @@ void AEnemyPod::DeactivatePod()
 {
     if (CurrentState == EPodState::Inactive) return;
 
-    UE_LOG(LogTemp, Log, TEXT("EnemyPod %d: Deactivating"), PodID);
+    UE_LOG(LogTemp, Warning, TEXT("[TM] EnemyPod %d: Deactivating"), PodID);
+
+    for (ABaseEnemy* Enemy : ActiveEnemies)
+    {
+        if (Enemy) Enemy->OnEnemyDied.RemoveDynamic(this, &AEnemyPod::OnEnemyDefeated);
+    }
 
     // Return all enemies to pool
     if (EnemyPool)
@@ -135,6 +145,7 @@ void AEnemyPod::SpawnPodEnemies()
     if (!EnemyPool || SpawnPoints.Num() == 0)
     {
         UE_LOG(LogTemp, Warning, TEXT("EnemyPod %d: Cannot spawn - no pool or spawn points"), PodID);
+        TransitionToState(EPodState::Inactive);
         return;
     }
 
@@ -195,12 +206,13 @@ void AEnemyPod::SpawnPodEnemies()
                 SetEnemyPatrolBehavior(Enemy);
             }
 
+            Enemy->OnEnemyDied.AddUniqueDynamic(this, &AEnemyPod::OnEnemyDefeated);
             ActiveEnemies.Add(Enemy);
             CurrentEnemyCount++;
         }
     }
 
-    UE_LOG(LogTemp, Log, TEXT("EnemyPod %d: Spawned %d/%d enemies"),
+    UE_LOG(LogTemp, Warning, TEXT("[TM] EnemyPod %d: Spawned %d/%d enemies"),
         PodID, SpawnedEnemies.Num(), SpawnCount);
 
     if (SpawnedEnemies.Num() > 0)
@@ -224,12 +236,14 @@ void AEnemyPod::SpawnPodEnemies()
 void AEnemyPod::OnEnemyDefeated(ABaseEnemy* DefeatedEnemy)
 {
     if (!DefeatedEnemy) return;
+    if (!ActiveEnemies.Contains(DefeatedEnemy)) return;
+    DefeatedEnemy->OnEnemyDied.RemoveDynamic(this, &AEnemyPod::OnEnemyDefeated);
 
     ActiveEnemies.Remove(DefeatedEnemy);
     CurrentEnemyCount--;
     DefeatedCount++;
 
-    UE_LOG(LogTemp, Verbose, TEXT("EnemyPod %d: Enemy defeated. %d remaining, %d total defeated"),
+    UE_LOG(LogTemp, Warning, TEXT("[TM] EnemyPod %d: Enemy defeated. %d remaining, %d total defeated"),
         PodID, CurrentEnemyCount, DefeatedCount);
 
     // Calculate defeat ratio
@@ -241,7 +255,7 @@ void AEnemyPod::OnEnemyDefeated(ABaseEnemy* DefeatedEnemy)
         TransitionToState(EPodState::Defeated);
         OnPodDefeated.Broadcast();
 
-        UE_LOG(LogTemp, Log, TEXT("EnemyPod %d: COMPLETELY CLEARED!"), PodID);
+        UE_LOG(LogTemp, Warning, TEXT("[TM] EnemyPod %d: COMPLETELY CLEARED!"), PodID);
 
         // Reward player with mana
         ATMCharacter* Player = GetPlayerInRange();
@@ -253,8 +267,9 @@ void AEnemyPod::OnEnemyDefeated(ABaseEnemy* DefeatedEnemy)
                 PodID, RewardMana);
         }
     }
-    else if (DefeatRatio > 0.5f && bLinksToNearbyPods)
+    else if (DefeatRatio > 0.5f && bLinksToNearbyPods && !bHasReinforced)
     {
+        bHasReinforced = true;
         // Lost half the pod, call for reinforcements
         UE_LOG(LogTemp, Log, TEXT("EnemyPod %d: Lost 50%% of forces, calling reinforcements"), PodID);
         TriggerReinforcements();
@@ -329,6 +344,7 @@ void AEnemyPod::TriggerReinforcements()
             {
                 Enemy->SetPodID(PodID);
                 Enemy->SetOwningPool(EnemyPool);
+                Enemy->OnEnemyDied.AddUniqueDynamic(this, &AEnemyPod::OnEnemyDefeated);
                 ActiveEnemies.Add(Enemy);
                 CurrentEnemyCount++;
 
@@ -341,7 +357,7 @@ void AEnemyPod::TriggerReinforcements()
             }
         }
 
-        UE_LOG(LogTemp, Log, TEXT("EnemyPod %d: Reinforcements arrived! +%d enemies, now %d total"),
+        UE_LOG(LogTemp, Warning, TEXT("[TM] EnemyPod %d: Reinforcements arrived! +%d enemies, now %d total"),
             PodID, Reinforcements.Num(), CurrentEnemyCount);
     }
 
@@ -352,45 +368,29 @@ void AEnemyPod::CheckEscapeConditions()
 {
     if (CurrentState != EPodState::Active) return;
 
-    ATMCharacter* Player = GetPlayerInRange();
+    // Was: only counted while the player was inside 2,000 units, yet "escaped"
+    // needed them beyond 3,000, so it could never pass.
+    APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
+    if (!Player) return;
 
-    if (!Player)
+    if (!IsPlayerInEscapeRange(Player))
     {
-        // No player in area - increment idle time
-        TimeSinceLastEngagement += 1.0f;
-
-        // If idle too long, consider deactivating
-        if (TimeSinceLastEngagement > 30.0f) // 30 seconds idle
-        {
-            UE_LOG(LogTemp, Log, TEXT("EnemyPod %d: Idle for 30s, deactivating"), PodID);
-            DeactivatePod();
-        }
+        TimeSinceLastEngagement = 0.f;
+        bEscapeCounted = false;
         return;
     }
 
-    // Check if player escaped
-    bool bPlayerEscaped = IsPlayerInEscapeRange(Player);
-
-    if (bPlayerEscaped)
+    if (!bEscapeCounted && bReinforcesIfPlayerEscapes)
     {
-        UE_LOG(LogTemp, Log, TEXT("EnemyPod %d: Player escaped! Distance: %f"),
-            PodID, FVector::Dist(GetActorLocation(), Player->GetActorLocation()));
-
-        if (bReinforcesIfPlayerEscapes)
-        {
-            // Player escaped - they'll face a bigger pod later
-            BaseEnemyCount = FMath::Min(BaseEnemyCount + 2, MaxEnemyCount);
-            UE_LOG(LogTemp, Log, TEXT("EnemyPod %d: Increased base count to %d for next encounter"),
-                PodID, BaseEnemyCount);
-        }
-
-        // Reset timer but don't deactivate - wait for player return
-        TimeSinceLastEngagement = 0.f;
+        BaseEnemyCount = FMath::Min(BaseEnemyCount + 2, MaxEnemyCount);
+        bEscapeCounted = true;
+        UE_LOG(LogTemp, Warning, TEXT("[TM] EnemyPod %d: Player escaped, next encounter has %d enemies"), PodID, BaseEnemyCount);
     }
-    else
+
+    TimeSinceLastEngagement += 1.f;
+    if (TimeSinceLastEngagement > 30.f)
     {
-        // Player is engaged
-        TimeSinceLastEngagement = 0.f;
+        DeactivatePod();
     }
 }
 
@@ -421,31 +421,19 @@ ATMCharacter* AEnemyPod::GetPlayerInRange() const
 
 TArray<AEnemyPod*> AEnemyPod::GetNearbyPods() const
 {
+    // Was an overlap query on a collision channel no pod is on (and which is
+    // now the Weapon channel). A distance check over all pods is plenty.
     TArray<AEnemyPod*> Result;
 
-    if (!GetWorld()) return Result;
-
-    TArray<FOverlapResult> Overlaps;
-    FCollisionQueryParams Params;
-    Params.AddIgnoredActor(this);
-
-    GetWorld()->OverlapMultiByObjectType(
-        Overlaps,
-        GetActorLocation(),
-        FQuat::Identity,
-        FCollisionObjectQueryParams(ECC_GameTraceChannel1), // Custom channel for pods
-        FCollisionShape::MakeSphere(PodLinkRadius),
-        Params);
-
-    for (const FOverlapResult& Overlap : Overlaps)
+    for (TActorIterator<AEnemyPod> It(GetWorld()); It; ++It)
     {
-        AEnemyPod* Pod = Cast<AEnemyPod>(Overlap.GetActor());
-        if (Pod && Pod != this && Pod->CurrentState == EPodState::Active)
+        AEnemyPod* Pod = *It;
+        if (Pod != this && Pod->CurrentState == EPodState::Active &&
+            FVector::Dist(GetActorLocation(), Pod->GetActorLocation()) <= PodLinkRadius)
         {
             Result.Add(Pod);
         }
     }
-
     return Result;
 }
 

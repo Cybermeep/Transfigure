@@ -240,6 +240,10 @@ public:
     UFUNCTION(BlueprintCallable, Category = "TM|Magic|Buffs")
     void ApplyDamageBuff(float Multiplier, float Duration);
 
+    /** Enemy hits arrive here. The player's own damage (e.g. their FireBlast) is ignored. No death yet. */
+    virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent,
+        AController* EventInstigator, AActor* DamageCauser) override;
+
     /** Current damage buff multiplier (1 = no buff). Used by the gun and spells. */
     UFUNCTION(BlueprintPure, Category = "TM|Magic|Buffs")
     float GetDamageMultiplier() const { return CurrentDamageMultiplier; }

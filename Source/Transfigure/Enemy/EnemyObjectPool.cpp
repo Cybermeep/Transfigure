@@ -20,6 +20,11 @@ void AEnemyObjectPool::BeginPlay()
         PoolMaintenanceTimer,
         this, &AEnemyObjectPool::PerformPoolMaintenance,
         5.0f, true, 5.0f);
+
+    if (StartupEnemyClass)
+    {
+        InitializePool(StartupEnemyClass, StartupPoolSize);
+    }
 }
 
 void AEnemyObjectPool::Tick(float DeltaTime)
@@ -29,6 +34,9 @@ void AEnemyObjectPool::Tick(float DeltaTime)
 
 void AEnemyObjectPool::InitializePool(TSubclassOf<ABaseEnemy> InEnemyClass, int32 InPoolSize, int32 InMaxConcurrent)
 {
+    // Already built (e.g. by StartupEnemyClass): a second call from a Blueprint is ignored.
+    if (Pool.Num() > 0) return;
+
     EnemyClass = InEnemyClass;
     PoolSize = InPoolSize;
     MaxConcurrent = InMaxConcurrent > 0 ? InMaxConcurrent : PoolSize;
@@ -54,6 +62,10 @@ void AEnemyObjectPool::InitializePool(TSubclassOf<ABaseEnemy> InEnemyClass, int3
             Enemy->SetActorEnableCollision(false);
             Enemy->SetLifeSpan(0.f);
 
+            // Park it fully: timers, tick and movement off until requested.
+            Enemy->SetOwningPool(this);
+            Enemy->OnReturnToPool();
+
             Enemy->OnDestroyed.AddDynamic(this, &AEnemyObjectPool::OnEnemyDestroyed);
 
             FEnemyPoolEntry Entry;
@@ -65,7 +77,7 @@ void AEnemyObjectPool::InitializePool(TSubclassOf<ABaseEnemy> InEnemyClass, int3
         }
     }
 
-    UE_LOG(LogTemp, Log, TEXT("EnemyObjectPool: Initialized pool with %d enemies"), PoolSize);
+    UE_LOG(LogTemp, Warning, TEXT("[TM] EnemyObjectPool: Initialized pool with %d x %s"), Pool.Num(), *GetNameSafe(EnemyClass));
 }
 
 ABaseEnemy* AEnemyObjectPool::RequestEnemy(FVector SpawnLocation, FRotator SpawnRotation, int32 PodID)
@@ -257,6 +269,8 @@ void AEnemyObjectPool::OnEnemyDestroyed(AActor* DestroyedActor)
                 {
                     NewEnemy->SetActorHiddenInGame(true);
                     NewEnemy->SetActorEnableCollision(false);
+                    NewEnemy->SetOwningPool(this);
+                    NewEnemy->OnReturnToPool();
                     NewEnemy->OnDestroyed.AddDynamic(this, &AEnemyObjectPool::OnEnemyDestroyed);
 
                     FEnemyPoolEntry NewEntry;
@@ -275,26 +289,20 @@ void AEnemyObjectPool::OnEnemyDestroyed(AActor* DestroyedActor)
 
 void AEnemyObjectPool::PerformPoolMaintenance()
 {
-    float CurrentTime = GetWorld()->GetTimeSeconds();
-
-    for (FEnemyPoolEntry& Entry : Pool)
+    // No time limit (it made live enemies vanish mid-fight). Only return
+    // enemies that fell out of the world. Collect first: ReturnEnemy edits entries.
+    TArray<ABaseEnemy*> ToReturn;
+    for (const FEnemyPoolEntry& Entry : Pool)
     {
-        if (Entry.bIsActive && Entry.Enemy)
+        if (Entry.bIsActive && Entry.Enemy &&
+            URingFrameUtils::IsBelowSurface(Entry.Enemy->GetActorLocation(), 5000.0f))
         {
-            if (CurrentTime - Entry.SpawnTime > 300.0f)
-            {
-                UE_LOG(LogTemp, Warning, TEXT("EnemyObjectPool: Force-returning enemy due to timeout"));
-                ReturnEnemy(Entry.Enemy);
-            }
-
-            // Was Location.Z < -5000.f -- meaningless on a ring, where the surface
-            // itself sits at world Z near -Radius. IsBelowSurface checks ring
-            // altitude instead.
-            if (URingFrameUtils::IsBelowSurface(Entry.Enemy->GetActorLocation(), 5000.0f))
-            {
-                UE_LOG(LogTemp, Warning, TEXT("EnemyObjectPool: Enemy fell out of world, returning to pool"));
-                ReturnEnemy(Entry.Enemy);
-            }
+            ToReturn.Add(Entry.Enemy);
         }
+    }
+    for (ABaseEnemy* Enemy : ToReturn)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("EnemyObjectPool: %s fell out of world, returning to pool"), *GetNameSafe(Enemy));
+        ReturnEnemy(Enemy);
     }
 }

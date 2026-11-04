@@ -5,6 +5,9 @@
 #include "Components/WidgetComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Engine/DamageEvents.h"
+#include "AIController.h"
+#include "Navigation/PathFollowingComponent.h"
+#include "Components/CapsuleComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "RingWorldGeometry.h"
 #include "RingWorldSettings.h"
@@ -17,12 +20,25 @@ ABaseEnemy::ABaseEnemy()
     HealthBarWidget->SetupAttachment(RootComponent);
     HealthBarWidget->SetWidgetSpace(EWidgetSpace::Screen);
     HealthBarWidget->SetDrawSize(FVector2D(100, 20));
+
+    // Get an AI controller whether placed in the map or spawned by a pool.
+    AutoPossessAI = EAutoPossessAI::PlacedInWorldOrSpawned;
+    bUseControllerRotationYaw = false;
+    GetCharacterMovement()->bOrientRotationToMovement = true;
 }
 
 void ABaseEnemy::BeginPlay()
 {
     Super::BeginPlay();
     Health = MaxHealth;
+    BaseMaxWalkSpeed = GetCharacterMovement()->MaxWalkSpeed;
+
+    if (!OwningPool)
+    {
+        // Enemies placed directly in the map start chasing right away.
+        // (Pool enemies get their timers cleared when parked, and restarted in OnSpawnFromPool.)
+        GetWorldTimerManager().SetTimer(ChaseTimerHandle, this, &ABaseEnemy::UpdateChase, 0.5f, true);
+    }
 }
 
 void ABaseEnemy::Tick(float DeltaTime)
@@ -30,6 +46,20 @@ void ABaseEnemy::Tick(float DeltaTime)
     Super::Tick(DeltaTime);
 
     UpdateRingGravity(DeltaTime);
+
+    // Fallback when there's no nav mesh path: walk straight at the player.
+    if (bDirectChase && bIsAlive && CurrentState == EEnemyState::Combat)
+    {
+        if (const APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0))
+        {
+            const FVector ToPlayer = FVector::VectorPlaneProject(
+                Player->GetActorLocation() - GetActorLocation(), CachedRingUp);
+            if (ToPlayer.Size() > AttackRange * 0.75f)
+            {
+                AddMovementInput(ToPlayer.GetSafeNormal());
+            }
+        }
+    }
 
     // Update health bar visibility
     if (HealthBarWidget)
@@ -68,29 +98,145 @@ void ABaseEnemy::OnSpawnFromPool()
     Health = MaxHealth;
     CurrentState = EEnemyState::Idle;
     AlertnessLevel = 1.0f;
+    bDirectChase = false;
 
     SetActorHiddenInGame(false);
     SetActorEnableCollision(true);
+    SetActorTickEnabled(true);
+    GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 
-    GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+    UCharacterMovementComponent* CMC = GetCharacterMovement();
+    CMC->SetComponentTickEnabled(true);
+    CMC->MaxWalkSpeed = BaseMaxWalkSpeed;
+    CMC->SetMovementMode(MOVE_Walking);
 
+    GetWorldTimerManager().SetTimer(ChaseTimerHandle, this, &ABaseEnemy::UpdateChase, 0.5f, true);
     OnSpawnEffects();
 
-    UE_LOG(LogTemp, Verbose, TEXT("BaseEnemy: Spawned from pool with PodID %d"), PodID);
+    UE_LOG(LogTemp, Warning, TEXT("[TM] %s spawned from pool (pod %d) at %s"),
+        *GetName(), PodID, *GetActorLocation().ToString());
 }
 
 void ABaseEnemy::OnReturnToPool()
 {
     bIsAlive = false;
     CurrentState = EEnemyState::Dead;
+    GetWorldTimerManager().ClearAllTimersForObject(this);
 
+    // Fully parked: hidden, no collision, no tick, no movement.
     SetActorHiddenInGame(true);
     SetActorEnableCollision(false);
-    GetCharacterMovement()->StopMovementImmediately();
+    SetActorTickEnabled(false);
+
+    UCharacterMovementComponent* CMC = GetCharacterMovement();
+    CMC->StopMovementImmediately();
+    CMC->SetComponentTickEnabled(false);
 
     OnReturnEffects();
+}
 
-    UE_LOG(LogTemp, Verbose, TEXT("BaseEnemy: Returned to pool"));
+void ABaseEnemy::Die()
+{
+    if (!bIsAlive) return;
+
+    bIsAlive = false;
+    CurrentState = EEnemyState::Dead;
+    GetWorldTimerManager().ClearTimer(ChaseTimerHandle);
+    GetWorldTimerManager().ClearTimer(SlowTimerHandle);
+    GetWorldTimerManager().ClearTimer(StunTimerHandle);
+
+    if (AAIController* AI = Cast<AAIController>(GetController()))
+    {
+        AI->StopMovement();
+    }
+
+    // The corpse stops moving and no longer blocks shots or the player.
+    GetCharacterMovement()->DisableMovement();
+    GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+    UE_LOG(LogTemp, Warning, TEXT("[TM] %s died"), *GetName());
+    OnDeathEffects();
+    OnEnemyDied.Broadcast(this);
+
+    GetWorldTimerManager().SetTimer(DeathTimerHandle, this, &ABaseEnemy::FinishDeath, CorpseLifetime, false);
+}
+
+void ABaseEnemy::FinishDeath()
+{
+    if (OwningPool)
+    {
+        OwningPool->ReturnEnemy(this);
+    }
+    else
+    {
+        Destroy();
+    }
+}
+
+void ABaseEnemy::UpdateChase()
+{
+    if (!bIsAlive || CurrentState == EEnemyState::Stunned) return;
+
+    APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
+    AAIController* AI = Cast<AAIController>(GetController());
+    if (!Player || !AI) return;
+
+    const float Distance = FVector::Dist(GetActorLocation(), Player->GetActorLocation());
+    if (Distance > AwarenessRange)
+    {
+        AI->StopMovement();
+        bDirectChase = false;
+        return;
+    }
+
+    if (CurrentState != EEnemyState::Combat)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[TM] %s noticed the player (%.0f away)"), *GetName(), Distance);
+    }
+    CurrentState = EEnemyState::Combat;
+
+    const EPathFollowingRequestResult::Type Result = AI->MoveToActor(Player, AttackRange * 0.75f);
+    const bool bFailed = (Result == EPathFollowingRequestResult::Failed);
+    if (bFailed && !bDirectChase)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[TM] %s: no nav path to player, chasing in a straight line (nav mesh built?)"), *GetName());
+    }
+    bDirectChase = bFailed;
+
+    const float Now = GetWorld()->GetTimeSeconds();
+    if (Distance <= AttackRange && Now - LastAttackTime >= AttackCooldown)
+    {
+        LastAttackTime = Now;
+        UGameplayStatics::ApplyDamage(Player, AttackDamage, AI, this, UDamageType::StaticClass());
+    }
+}
+
+void ABaseEnemy::ApplySlow(float SpeedMultiplier, float Duration)
+{
+    if (!bIsAlive) return;
+    // Always relative to the base speed, so repeated slows can't stack down to zero.
+    GetCharacterMovement()->MaxWalkSpeed = BaseMaxWalkSpeed * SpeedMultiplier;
+    GetWorldTimerManager().SetTimer(SlowTimerHandle, this, &ABaseEnemy::EndSlow, Duration, false);
+}
+
+void ABaseEnemy::EndSlow()
+{
+    GetCharacterMovement()->MaxWalkSpeed = BaseMaxWalkSpeed;
+}
+
+void ABaseEnemy::ApplyStun(float Duration)
+{
+    if (!bIsAlive) return;
+    CurrentState = EEnemyState::Stunned;
+    GetCharacterMovement()->DisableMovement();
+    GetWorldTimerManager().SetTimer(StunTimerHandle, this, &ABaseEnemy::EndStun, Duration, false);
+}
+
+void ABaseEnemy::EndStun()
+{
+    if (!bIsAlive) return;
+    CurrentState = EEnemyState::Combat;
+    GetCharacterMovement()->SetMovementMode(MOVE_Walking);
 }
 
 // All engine damage funnels into TakePoolDamage, so there is exactly one
@@ -128,30 +274,6 @@ void ABaseEnemy::TakePoolDamage(float DamageAmount, FVector HitLocation)
     if (Health <= 0.0f)
     {
         Die();
-    }
-}
-
-void ABaseEnemy::Die()
-{
-    if (!bIsAlive) return;
-
-    bIsAlive = false;
-    CurrentState = EEnemyState::Dead;
-    OnDeathEffects();
-
-    GetCharacterMovement()->StopMovementImmediately();
-
-    if (OwningPool)
-    {
-        FTimerHandle DeathHandle;
-        GetWorldTimerManager().SetTimer(DeathHandle, [this]()
-            {
-                OwningPool->ReturnEnemy(this);
-            }, 1.0f, false);
-    }
-    else
-    {
-        SetLifeSpan(1.0f);
     }
 }
 

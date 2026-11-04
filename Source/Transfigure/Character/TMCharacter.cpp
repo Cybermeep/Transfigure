@@ -280,6 +280,21 @@ void ATMCharacter::OnJumpPressed()
 }
 
 
+// ── DAMAGE ──
+
+float ATMCharacter::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent,
+    AController* EventInstigator, AActor* DamageCauser)
+{
+    // Our own spells (FireBlast radial damage) shouldn't hurt us.
+    if (DamageCauser == this || EventInstigator == GetController()) return 0.f;
+
+    const float Applied = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
+    Health = FMath::Max(0.f, Health - Applied);
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Player took %.0f damage from %s, health %.0f"),
+        Applied, *GetNameSafe(DamageCauser), Health);
+    return Applied;
+}
+
 // ── COMBAT INPUT HANDLERS ──
 
 void ATMCharacter::OnFirePressed()

@@ -51,7 +51,18 @@ public:
         int32 GetAvailableCount() const { return PoolSize - ActiveCount; }
 
     UFUNCTION(BlueprintPure, Category = "Enemy|Pool")
-        bool CanSpawn(int32 Count = 1) const { return (ActiveCount + Count) <= PoolSize; }
+        bool CanSpawn(int32 Count = 1) const
+    {
+        const int32 Limit = MaxConcurrent > 0 ? MaxConcurrent : PoolSize;
+        return ActiveCount + Count <= Limit;
+    }
+
+    /** If set, the pool fills itself at BeginPlay (no Blueprint graph needed). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Enemy|Pool")
+        TSubclassOf<ABaseEnemy> StartupEnemyClass;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Enemy|Pool")
+        int32 StartupPoolSize = 8;
 
     UPROPERTY(BlueprintAssignable)
         FOnPoolExhausted OnPoolExhausted;

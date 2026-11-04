@@ -8,6 +8,9 @@
 
 class AEnemyObjectPool;
 class UWidgetComponent;
+class ABaseEnemy;
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnEnemyDied, ABaseEnemy*, Enemy);
 
 UENUM(BlueprintType)
 enum class EEnemyState : uint8
@@ -87,6 +90,30 @@ public:
     UPROPERTY(BlueprintReadOnly, Category = "Enemy|State")
     EEnemyState CurrentState = EEnemyState::Idle;
 
+    /** Fires once when health reaches 0 (before the corpse is removed). Pods listen to this. */
+    UPROPERTY(BlueprintAssignable, Category = "Enemy|Combat")
+    FOnEnemyDied OnEnemyDied;
+
+    /** Seconds the corpse stays before returning to the pool / being destroyed. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Enemy|Config")
+    float CorpseLifetime = 1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Enemy|Config")
+    float AttackRange = 150.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Enemy|Config")
+    float AttackDamage = 10.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Enemy|Config")
+    float AttackCooldown = 1.5f;
+
+    /** Multiplies walk speed for Duration seconds. A new slow replaces the old one (never stacks). */
+    UFUNCTION(BlueprintCallable, Category = "Enemy|Status")
+    void ApplySlow(float SpeedMultiplier, float Duration);
+
+    UFUNCTION(BlueprintCallable, Category = "Enemy|Status")
+    void ApplyStun(float Duration);
+
     /** World-space local up at this enemy's current ring position. EnemyPod and others can read this instead of FVector::UpVector. */
     UFUNCTION(BlueprintPure, Category = "Enemy|RingGravity")
     FVector GetRingUp() const { return CachedRingUp; }
@@ -103,6 +130,22 @@ protected:
      * upright and don't tip over as the surface curves under them).
      */
     void UpdateRingGravity(float DeltaTime);
+
+    // Simple chase/attack loop, run on a 0.5s timer while alive.
+    void UpdateChase();
+    void FinishDeath();
+    void EndSlow();
+    void EndStun();
+
+    FTimerHandle ChaseTimerHandle;
+    FTimerHandle DeathTimerHandle;
+    FTimerHandle SlowTimerHandle;
+    FTimerHandle StunTimerHandle;
+    float BaseMaxWalkSpeed = 600.f;
+    float LastAttackTime = -1000.f;
+
+    /** True when pathfinding failed (e.g. no nav mesh): walk straight at the player instead. */
+    bool bDirectChase = false;
 
     UPROPERTY()
     int32 PodID = -1;

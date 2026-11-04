@@ -55,6 +55,14 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Pod|Configuration")
         float PodLinkRadius = 5000.f;
 
+    /** Pool to spawn from. Set this on the placed pod; no Blueprint graph needed. */
+    UPROPERTY(EditInstanceOnly, Category = "Pod|Configuration")
+        TObjectPtr<AEnemyObjectPool> StartupEnemyPool;
+
+    /** Pod ID. -1 = pick a unique one automatically. Two pods must never share an ID. */
+    UPROPERTY(EditInstanceOnly, Category = "Pod|Configuration")
+        int32 StartupPodID = -1;
+
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Pod|Destruction")
         bool bUsesCoverFromDestruction = true;
 
@@ -146,6 +154,12 @@ protected:
 
     UPROPERTY()
         FTimerHandle EscapeCheckTimerHandle;
+
+    /** The escape bonus is added once per escape, not every second. */
+    bool bEscapeCounted = false;
+
+    /** Only one reinforcement wave per activation, so the pod can actually be cleared. */
+    bool bHasReinforced = false;
 
     UFUNCTION()
         void OnActivationOverlap(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
