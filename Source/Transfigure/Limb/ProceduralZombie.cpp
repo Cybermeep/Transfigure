@@ -20,7 +20,7 @@
 AProceduralZombie::AProceduralZombie()
 {
     // Defaults for the UE5 Mannequin (migrated into /Game/Characters/Mannequins).
-    BodySkeleton = TSoftObjectPtr<USkeletalMesh>(FSoftObjectPath(TEXT("/Game/Characters/Mannequins/Meshes/SKM_Manny.SKM_Manny")));
+    BodySkeleton = TSoftObjectPtr<USkeletalMesh>(FSoftObjectPath(TEXT("/Game/Characters/Mannequins/Meshes/SKM_Manny_Simple.SKM_Manny_Simple")));
     BodyAnimClass = TSoftClassPtr<UAnimInstance>(FSoftObjectPath(TEXT("/Game/Characters/Mannequins/Anims/Unarmed/ABP_Unarmed.ABP_Unarmed_C")));
     Parts = MakeDefaultParts();
 
