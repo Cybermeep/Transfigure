@@ -328,9 +328,14 @@ void AEnemyPod::TriggerReinforcements()
         for (int32 i = 0; i < SpawnPoints.Num(); i++) AvailableIndices.Add(i);
     }
 
+    // Shuffle, then take distinct points so reinforcements don't spawn inside each other.
+    for (int32 i = AvailableIndices.Num() - 1; i > 0; i--)
+    {
+        AvailableIndices.Swap(i, FMath::RandRange(0, i));
+    }
     for (int32 i = 0; i < ReinforceCount; i++)
     {
-        int32 SpawnIndex = AvailableIndices[FMath::RandRange(0, AvailableIndices.Num() - 1)];
+        const int32 SpawnIndex = AvailableIndices[i % AvailableIndices.Num()];
         SpawnLocations.Add(SpawnPoints[SpawnIndex].Location);
     }
 
