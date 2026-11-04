@@ -19,6 +19,7 @@
 #include "Transfiguration/BuffEffectComponent.h"
 #include "Grapple/GrappleComponent.h"
 #include "Combat/WeaponComponent.h"
+#include "Character/TMHUD.h"
 #include "Enemy/BaseEnemy.h"
 #include "Transfigure.h"
 #include "Destruction/DestructionManager.h"
@@ -101,6 +102,13 @@ void ATMCharacter::NotifyControllerChanged()
 
     if (APlayerController* PC = Cast<APlayerController>(GetController()))
     {
+        // Placeholder canvas HUD (crosshair, status, spell wheel). Installed here so the
+        // Game Mode's HUD Class doesn't need changing.
+        if (!Cast<ATMHUD>(PC->GetHUD()))
+        {
+            PC->ClientSetHUD(ATMHUD::StaticClass());
+        }
+
         if (auto* Sub = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
         {
             if (DefaultMappingContext)
@@ -140,8 +148,8 @@ void ATMCharacter::Tick(float DeltaTime)
     {
         LastTMLog = Now;
         const UCharacterMovementComponent* CMC = GetCharacterMovement();
-        UE_LOG(LogTemp, Warning, TEXT("[TM] Loc=%s  Vel=%s  Mode=%s  GravDir=%s  Controller=%s  State=%s"),
-            *GetActorLocation().ToString(), *GetVelocity().ToString(),
+        UE_LOG(LogTemp, Warning, TEXT("[TM] Loc=%s  Vel=%s  Speed=%.0f  MaxWalk=%.0f  Mode=%s  GravDir=%s  Controller=%s  State=%s"),
+            *GetActorLocation().ToString(), *GetVelocity().ToString(), GetVelocity().Size(), CMC->MaxWalkSpeed,
             *CMC->GetMovementName(), *CMC->GetGravityDirection().ToString(),
             *GetNameSafe(GetController()), *CurrentStateName);
     }
@@ -216,7 +224,9 @@ void ATMCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 
     // Magic Inputs
     EIC->BindAction(IA_DrawSigil, ETriggerEvent::Started, this, &ATMCharacter::OnDrawSigilPressed);
+    // Q: tap = place the selected sigil at the crosshair, hold = spell wheel.
     EIC->BindAction(IA_PlaceSigil, ETriggerEvent::Started, this, &ATMCharacter::OnPlaceSigilPressed);
+    EIC->BindAction(IA_PlaceSigil, ETriggerEvent::Completed, this, &ATMCharacter::OnPlaceSigilReleased);
     EIC->BindAction(IA_TriggerSigil, ETriggerEvent::Started, this, &ATMCharacter::OnTriggerSigilPressed);
     EIC->BindAction(IA_TriggerAll, ETriggerEvent::Started, this, &ATMCharacter::OnTriggerAllPressed);
 
@@ -254,6 +264,22 @@ void ATMCharacter::OnMove(const FInputActionValue& Value)
 void ATMCharacter::OnLook(const FInputActionValue& Value)
 {
     FVector2D Vec = Value.Get<FVector2D>();
+
+    if (bSpellWheelOpen)
+    {
+        // Mouse drives the wheel cursor instead of the camera. Screen Y points down;
+        // the look action already negates Y, so mouse-up arrives as negative Y.
+        SpellWheelCursor = (SpellWheelCursor + FVector2D(Vec.X, Vec.Y) * SpellWheelSensitivity).GetClampedToMaxSize(1.f);
+        if (SpellWheelCursor.Size() > 0.35f && SpellWheelOptions.Num() > 0)
+        {
+            const float Step = 2.f * PI / SpellWheelOptions.Num();
+            float Angle = FMath::Atan2(SpellWheelCursor.Y, SpellWheelCursor.X) + PI * 0.5f; // 0 = top
+            if (Angle < 0.f) Angle += 2.f * PI;
+            SpellWheelHighlighted = FMath::RoundToInt(Angle / Step) % SpellWheelOptions.Num();
+        }
+        return;
+    }
+
     // Accumulated and consumed in UpdateRingGravity, not applied to
     // ControlRotation — see the comment on CameraPitchTarget in the header
     // for why (ControlRotation is a world-axis rotator, not gravity-relative).
@@ -337,7 +363,44 @@ void ATMCharacter::OnDrawSigilPressed()
 
 void ATMCharacter::OnPlaceSigilPressed()
 {
-    TransfigurationCasting->ConfirmPlacement();
+    // Start the hold timer; if Q is still down when it fires, the wheel opens.
+    GetWorldTimerManager().SetTimer(SpellWheelOpenTimer, this, &ATMCharacter::OpenSpellWheel,
+        SpellWheelHoldTime, false);
+}
+
+void ATMCharacter::OnPlaceSigilReleased()
+{
+    if (bSpellWheelOpen)
+    {
+        CloseSpellWheel();
+        return;
+    }
+
+    // Short tap: place the selected sigil at the crosshair right now.
+    GetWorldTimerManager().ClearTimer(SpellWheelOpenTimer);
+    if (TransfigurationCasting)
+    {
+        TransfigurationCasting->CastAtAim(DrawSigilSpellID);
+    }
+}
+
+void ATMCharacter::OpenSpellWheel()
+{
+    SpellWheelOptions = TransfigurationCasting ? TransfigurationCasting->GetAvailableSpellIDs() : TArray<FName>();
+    SpellWheelHighlighted = SpellWheelOptions.IndexOfByKey(DrawSigilSpellID);
+    SpellWheelCursor = FVector2D::ZeroVector;
+    bSpellWheelOpen = true;
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Spell wheel opened (%d spells)"), SpellWheelOptions.Num());
+}
+
+void ATMCharacter::CloseSpellWheel()
+{
+    bSpellWheelOpen = false;
+    if (SpellWheelOptions.IsValidIndex(SpellWheelHighlighted))
+    {
+        DrawSigilSpellID = SpellWheelOptions[SpellWheelHighlighted];
+    }
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Spell wheel closed, selected %s"), *DrawSigilSpellID.ToString());
 }
 
 void ATMCharacter::OnTriggerSigilPressed()

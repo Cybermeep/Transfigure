@@ -31,6 +31,16 @@ void UBuffEffectComponent::ApplyBuff(EBuffType BuffType, float Multiplier, float
     ATMCharacter* TMChar = Cast<ATMCharacter>(GetOwner());
     if (!TMChar) return;
 
+    // Same buff already running: just top up its time (no re-apply, no log spam).
+    for (FActiveBuff& Existing : ActiveBuffs)
+    {
+        if (Existing.Type == BuffType && FMath::IsNearlyEqual(Existing.Multiplier, Multiplier))
+        {
+            Existing.TimeRemaining = FMath::Max(Existing.TimeRemaining, Duration);
+            return;
+        }
+    }
+
     RemoveBuff(BuffType);
 
     FActiveBuff NewBuff;
@@ -53,8 +63,8 @@ void UBuffEffectComponent::ApplyBuff(EBuffType BuffType, float Multiplier, float
         break;
     }
 
-    UE_LOG(LogTemp, Warning, TEXT("[TM] Buff applied: %s x%.2f for %.1fs"),
-        *UEnum::GetValueAsString(BuffType), Multiplier, Duration);
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Buff applied: %s x%.2f for %.1fs (max walk speed now %.0f)"),
+        *UEnum::GetValueAsString(BuffType), Multiplier, Duration, TMChar->GetCharacterMovement()->MaxWalkSpeed);
     OnBuffApplied.Broadcast(BuffType, Duration);
 }
 

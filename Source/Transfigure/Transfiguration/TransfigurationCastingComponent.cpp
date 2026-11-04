@@ -208,6 +208,44 @@ void UTransfigurationCastingComponent::ConfirmPlacement()
     TransitionToState(ECastingState::Idle);
 }
 
+bool UTransfigurationCastingComponent::CastAtAim(FName SpellID)
+{
+    if (CurrentState == ECastingState::Drawing) CancelDrawMode();
+
+    BeginDrawMode(SpellID);                       // checks registry + mana, logs if refused
+    if (CurrentState != ECastingState::Drawing) return false;
+
+    PerformAimTrace(CurrentAimHit);
+    if (!CurrentAimHit.bBlockingHit)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[TM] Sigil: no surface at the crosshair (within %.0f)"), MaxPlacementDistance);
+        CancelDrawMode();
+        return false;
+    }
+
+    ConfirmPlacement();
+    if (CurrentState == ECastingState::Drawing)   // placement refused (e.g. damaged surface)
+    {
+        CancelDrawMode();
+        return false;
+    }
+    return true;
+}
+
+TArray<FName> UTransfigurationCastingComponent::GetAvailableSpellIDs() const
+{
+    TArray<FName> Result;
+    if (const UTransfigurationRegistry* Reg = GetSpellRegistry())
+    {
+        for (const auto& Pair : Reg->SpellTable)
+        {
+            if (Pair.Value) Result.Add(Pair.Key);   // skip entries pointing at missing assets
+        }
+    }
+    Result.Sort([](const FName& A, const FName& B) { return A.LexicalLess(B); });
+    return Result;
+}
+
 void UTransfigurationCastingComponent::CancelDrawMode()
 {
     if (CurrentState != ECastingState::Drawing) return;

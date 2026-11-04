@@ -33,6 +33,14 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Casting")
         void CancelDrawMode();
 
+    /** One press: start the spell and place it at the crosshair immediately. Returns true if placed. */
+    UFUNCTION(BlueprintCallable, Category = "Casting")
+        bool CastAtAim(FName SpellID);
+
+    /** Every spell key in DA_SpellRegistry (sorted), for the spell wheel. */
+    UFUNCTION(BlueprintCallable, Category = "Casting")
+        TArray<FName> GetAvailableSpellIDs() const;
+
     UFUNCTION(BlueprintCallable, Category = "Casting")
         void TriggerNearestManualSigil();
 
@@ -72,7 +80,7 @@ public:
 
     // Configuration
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Casting")
-        float MaxPlacementDistance = 600.f;
+        float MaxPlacementDistance = 1500.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Casting")
         int32 MaxActiveSigils = 5;

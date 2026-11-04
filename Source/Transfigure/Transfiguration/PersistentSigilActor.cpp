@@ -86,11 +86,12 @@ void APersistentSigilActor::ApplyBuffToOverlappingActors()
 
     for (AActor* Actor : OverlappingActors)
     {
+        // Refreshed every tick while inside, so the buff lasts as long as you
+        // stand in the ring plus BuffDuration after leaving (was: 3 s from entry).
         ATMCharacter* TMChar = Cast<ATMCharacter>(Actor);
-        if (TMChar && !AffectedActors.Contains(Actor))
+        if (TMChar)
         {
             TMChar->ApplySpeedBuff(BuffMultiplier, BuffDuration);
-            AffectedActors.Add(Actor);
         }
     }
 }

@@ -106,7 +106,21 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Mana|Regeneration")
     float ManaRegenDelay = 1.0f;
 
-    /** Spell the Draw Sigil key starts. Change it to test other spells from DA_SpellRegistry. */
+    // ── SPELL WHEEL (hold Q) ──
+    /** Hold Q at least this long to open the spell wheel; a shorter tap places the sigil. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Magic")
+    float SpellWheelHoldTime = 0.2f;
+
+    /** How far the mouse has to move to sweep across the wheel (higher = more sensitive). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Magic")
+    float SpellWheelSensitivity = 0.08f;
+
+    bool IsSpellWheelOpen() const { return bSpellWheelOpen; }
+    const TArray<FName>& GetSpellWheelOptions() const { return SpellWheelOptions; }
+    int32 GetSpellWheelHighlighted() const { return SpellWheelHighlighted; }
+    FVector2D GetSpellWheelCursor() const { return SpellWheelCursor; }
+
+    /** Selected spell: tap Q places it, the wheel changes it. Must be a key in DA_SpellRegistry. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Magic")
     FName DrawSigilSpellID = TEXT("FireBlast");
 
@@ -448,6 +462,15 @@ private:
     void OnSlidePressed();
     void OnDrawSigilPressed();
     void OnPlaceSigilPressed();
+    void OnPlaceSigilReleased();
+    void OpenSpellWheel();
+    void CloseSpellWheel();
+
+    bool bSpellWheelOpen = false;
+    TArray<FName> SpellWheelOptions;
+    int32 SpellWheelHighlighted = INDEX_NONE;
+    FVector2D SpellWheelCursor = FVector2D::ZeroVector;
+    FTimerHandle SpellWheelOpenTimer;
     void OnTriggerSigilPressed();
     void OnTriggerAllPressed();
     void OnTemporalClapPressed();
