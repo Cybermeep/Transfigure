@@ -90,7 +90,15 @@ void UWeaponComponent::ProcessHit(const FHitResult& Hit, float HitDamage)
     if (!OwnerCharacter) return;
 
     ABaseEnemy* Enemy = Cast<ABaseEnemy>(Hit.GetActor());
-    if (!Enemy || !Enemy->IsAlive()) return;
+    if (!Enemy) return;
+
+    if (!Enemy->IsAlive())
+    {
+        // Corpse: still pass the hit on (procedural zombies can be dismembered
+        // after death), but no mana, kill credit or hit events.
+        Enemy->TakePoolDamage(HitDamage * OwnerCharacter->GetDamageMultiplier(), Hit.ImpactPoint);
+        return;
+    }
 
     // Headshots need per-bone hits, which arrive with the limb system.
     const bool bHeadshot = Hit.BoneName == HeadBoneName;

@@ -331,8 +331,8 @@ void UGrappleComponent::SlamImpact(const FVector& Location, const FVector& Norma
     for (const FOverlapResult& Overlap : Overlaps)
     {
         ABaseEnemy* Enemy = Cast<ABaseEnemy>(Overlap.GetActor());
-        if (!Enemy || !Enemy->IsAlive() || Hit.Contains(Enemy)) continue;
-        Hit.Add(Enemy);
+        if (!Enemy || Hit.Contains(Enemy)) continue;
+        Hit.Add(Enemy);   // corpses included: they can still lose limbs
 
         // Closer = more damage (full at the centre, half at the edge).
         const float Dist = FVector::Dist(Location, Enemy->GetActorLocation());

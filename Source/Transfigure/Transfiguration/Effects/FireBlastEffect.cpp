@@ -42,8 +42,8 @@ void UFireBlastEffect::Execute(
     for (const FOverlapResult& Overlap : Overlaps)
     {
         ABaseEnemy* Enemy = Cast<ABaseEnemy>(Overlap.GetActor());
-        if (!Enemy || !Enemy->IsAlive() || Hit.Contains(Enemy)) continue;
-        Hit.Add(Enemy);
+        if (!Enemy || Hit.Contains(Enemy)) continue;
+        Hit.Add(Enemy);   // corpses included: they can still lose limbs
 
         const float Dist = FVector::Dist(Origin, Enemy->GetActorLocation());
         const float Scale = FMath::GetMappedRangeValueClamped(FVector2D(Inner, Outer), FVector2D(1.f, 0.5f), Dist);
