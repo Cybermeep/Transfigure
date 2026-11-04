@@ -19,6 +19,8 @@
 #include "Transfiguration/BuffEffectComponent.h"
 #include "Grapple/GrappleComponent.h"
 #include "Combat/WeaponComponent.h"
+#include "Enemy/BaseEnemy.h"
+#include "Transfigure.h"
 #include "Destruction/DestructionManager.h"
 #include "Kismet/GameplayStatics.h"
 #include "TimerManager.h"
@@ -190,7 +192,9 @@ void ATMCharacter::UpdateRingGravity(float DeltaTime)
     }
     if (CameraPitchTarget)
     {
-        CameraPitchTarget->SetRelativeRotation(FRotator(CameraPitch, 0.0f, 0.0f));
+        // Ease out any yaw offset left by a facing snap.
+        CameraYawOffset = FMath::FInterpTo(CameraYawOffset, 0.0f, DeltaTime, CameraRecenterSpeed);
+        CameraPitchTarget->SetRelativeRotation(FRotator(CameraPitch, CameraYawOffset, 0.0f));
     }
 }
 
@@ -218,9 +222,10 @@ void ATMCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
     EIC->BindAction(IA_TemporalClap, ETriggerEvent::Started, this, &ATMCharacter::OnTemporalClapPressed);
 
     // Grapple Inputs
+    // Was bound to Started, Triggered (every frame held) and Completed, all firing the grapple.
+    // Now: press to fire, release to let go.
     EIC->BindAction(IA_Grapple, ETriggerEvent::Started, this, &ATMCharacter::OnGrapplePressed);
-    EIC->BindAction(IA_Grapple, ETriggerEvent::Triggered, this, &ATMCharacter::OnGrapplePressed);
-    EIC->BindAction(IA_Grapple, ETriggerEvent::Completed, this, &ATMCharacter::OnGrapplePressed);
+    EIC->BindAction(IA_Grapple, ETriggerEvent::Completed, this, &ATMCharacter::OnGrappleReleased);
     EIC->BindAction(IA_GrappleKick, ETriggerEvent::Started, this, &ATMCharacter::OnGrappleKickPressed);
     EIC->BindAction(IA_GrappleSlam, ETriggerEvent::Started, this, &ATMCharacter::OnGrappleSlamPressed);
     EIC->BindAction(IA_GrappleToss, ETriggerEvent::Started, this, &ATMCharacter::OnGrappleTossPressed);
@@ -280,6 +285,25 @@ void ATMCharacter::OnJumpPressed()
 }
 
 
+// ── FACING ──
+
+void ATMCharacter::SetFacingDirection(const FVector& Direction)
+{
+    const FVector Flat = FVector::VectorPlaneProject(Direction, CachedRingUp).GetSafeNormal();
+    if (Flat.IsNearlyZero()) return;
+
+    // Signed yaw change around local up. The camera is offset by the opposite
+    // amount so its world direction doesn't move this frame, then eases in.
+    const float Cos = FVector::DotProduct(CachedFacingForward, Flat);
+    const float Sin = FVector::DotProduct(FVector::CrossProduct(CachedFacingForward, Flat), CachedRingUp);
+    const float DeltaYaw = FMath::RadiansToDegrees(FMath::Atan2(Sin, Cos));
+    CameraYawOffset = FRotator::NormalizeAxis(CameraYawOffset - DeltaYaw);
+
+    CachedFacingForward = Flat;
+    // Apply now (not next tick) so side traces like wall-run detection see the new facing.
+    SetActorRotation(FRotationMatrix::MakeFromXZ(Flat, CachedRingUp).ToQuat());
+}
+
 // ── DAMAGE ──
 
 float ATMCharacter::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent,
@@ -326,77 +350,68 @@ void ATMCharacter::OnTriggerAllPressed()
 
 // ── GRAPPLE INPUT HANDLERS ──
 
+bool ATMCharacter::TraceFromView(FHitResult& OutHit, float Range) const
+{
+    if (!GetController()) return false;
+
+    FVector CamLoc;
+    FRotator CamRot;
+    GetController()->GetPlayerViewPoint(CamLoc, CamRot);
+    const FVector Dir = CamRot.Vector();
+
+    // Same idea as the gun: start level with the character so objects
+    // between the camera and the player (e.g. a wall you're running on)
+    // can't block the trace. Range is measured from the character.
+    const float ToCharacter = FMath::Max(FVector::DotProduct(GetActorLocation() - CamLoc, Dir), 0.f);
+    const FVector Start = CamLoc + Dir * ToCharacter;
+
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(PlayerViewTrace), false, this);
+    return GetWorld()->LineTraceSingleByChannel(OutHit, Start, Start + Dir * Range, ECC_Weapon, Params);
+}
+
 void ATMCharacter::OnGrapplePressed()
 {
-    if (!GrappleComponent) return;
-
     FHitResult Hit;
-    FVector CamLoc;
-    FRotator CamRot;
-    GetController()->GetPlayerViewPoint(CamLoc, CamRot);
-    FVector TraceEnd = CamLoc + CamRot.Vector() * 3000.0f;
-
-    GetWorld()->LineTraceSingleByChannel(Hit, CamLoc, TraceEnd, ECC_Visibility);
-
-    if (Hit.bBlockingHit)
+    if (GrappleComponent && TraceFromView(Hit, GrappleComponent->MaxGrappleRange))
     {
-        GrappleComponent->FireGrapple(Hit.ImpactPoint, Hit.GetActor());
+        UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple pressed: hit %s"), *GetNameSafe(Hit.GetActor()));
+        GrappleComponent->FireGrapple(Hit.ImpactPoint, Cast<ABaseEnemy>(Hit.GetActor()), Hit.ImpactNormal);
+    }
+    else
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple pressed: nothing in range"));
     }
 }
 
-void ATMCharacter::OnGrappleKickPressed()
+void ATMCharacter::OnGrappleReleased()
 {
-    if (!GrappleComponent) return;
+    if (GrappleComponent) GrappleComponent->ReleaseGrapple();
+}
 
+void ATMCharacter::TryCombatGrapple(ECombatGrappleMove Move)
+{
     FHitResult Hit;
-    FVector CamLoc;
-    FRotator CamRot;
-    GetController()->GetPlayerViewPoint(CamLoc, CamRot);
-    FVector TraceEnd = CamLoc + CamRot.Vector() * 3000.0f;
-
-    GetWorld()->LineTraceSingleByChannel(Hit, CamLoc, TraceEnd, ECC_Pawn);
-
-    if (Hit.bBlockingHit && Hit.GetActor())
+    if (GrappleComponent && TraceFromView(Hit, GrappleComponent->MaxGrappleRange))
     {
-        GrappleComponent->ExecuteCombatMove(ECombatGrappleMove::Kick, Hit.GetActor());
+        GrappleComponent->ExecuteCombatMove(Move, Hit.GetActor());
+    }
+    else
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[TM] Combat move %s: nothing in range"), *UEnum::GetValueAsString(Move));
     }
 }
 
+void ATMCharacter::OnGrappleKickPressed()  { TryCombatGrapple(ECombatGrappleMove::Kick); }
 void ATMCharacter::OnGrappleSlamPressed()
 {
+    // Slam is a movement tech: aim anywhere (floor, wall, enemy). Aiming at
+    // nothing in the air turns it into a ground-pound.
     if (!GrappleComponent) return;
-
     FHitResult Hit;
-    FVector CamLoc;
-    FRotator CamRot;
-    GetController()->GetPlayerViewPoint(CamLoc, CamRot);
-    FVector TraceEnd = CamLoc + CamRot.Vector() * 3000.0f;
-
-    GetWorld()->LineTraceSingleByChannel(Hit, CamLoc, TraceEnd, ECC_Pawn);
-
-    if (Hit.bBlockingHit && Hit.GetActor())
-    {
-        GrappleComponent->ExecuteCombatMove(ECombatGrappleMove::Slam, Hit.GetActor());
-    }
+    const bool bHit = TraceFromView(Hit, GrappleComponent->MaxGrappleRange);
+    GrappleComponent->StartSlam(Hit.ImpactPoint, Hit.ImpactNormal, Hit.GetActor(), bHit);
 }
-
-void ATMCharacter::OnGrappleTossPressed()
-{
-    if (!GrappleComponent) return;
-
-    FHitResult Hit;
-    FVector CamLoc;
-    FRotator CamRot;
-    GetController()->GetPlayerViewPoint(CamLoc, CamRot);
-    FVector TraceEnd = CamLoc + CamRot.Vector() * 3000.0f;
-
-    GetWorld()->LineTraceSingleByChannel(Hit, CamLoc, TraceEnd, ECC_Pawn);
-
-    if (Hit.bBlockingHit && Hit.GetActor())
-    {
-        GrappleComponent->ExecuteCombatMove(ECombatGrappleMove::Toss, Hit.GetActor());
-    }
-}
+void ATMCharacter::OnGrappleTossPressed()  { TryCombatGrapple(ECombatGrappleMove::Toss); }
 
 void ATMCharacter::OnGrappleEvadePressed()
 {
@@ -415,23 +430,7 @@ void ATMCharacter::OnGrappleEvadePressed()
     GrappleComponent->ExecuteCombatMove(ECombatGrappleMove::Evade, nullptr);
 }
 
-void ATMCharacter::OnGrapplePullPressed()
-{
-    if (!GrappleComponent) return;
-
-    FHitResult Hit;
-    FVector CamLoc;
-    FRotator CamRot;
-    GetController()->GetPlayerViewPoint(CamLoc, CamRot);
-    FVector TraceEnd = CamLoc + CamRot.Vector() * 3000.0f;
-
-    GetWorld()->LineTraceSingleByChannel(Hit, CamLoc, TraceEnd, ECC_Pawn);
-
-    if (Hit.bBlockingHit && Hit.GetActor())
-    {
-        GrappleComponent->ExecuteCombatMove(ECombatGrappleMove::Pull, Hit.GetActor());
-    }
-}
+void ATMCharacter::OnGrapplePullPressed()  { TryCombatGrapple(ECombatGrappleMove::Pull); }
 
 void ATMCharacter::OnWebTrapPressed()
 {
@@ -470,7 +469,8 @@ float ATMCharacter::GetSpeedScalingFactor() const
 
 bool ATMCharacter::IsGrappling() const
 {
-    return GrappleComponent && GrappleComponent->GetCurrentState() != EGrappleState::Inactive;
+    return GrappleComponent && (GrappleComponent->GetCurrentState() != EGrappleState::Inactive
+        || GrappleComponent->IsSlamming());
 }
 
 EGrappleTier ATMCharacter::GetGrappleTier() const
@@ -519,6 +519,7 @@ bool ATMCharacter::CanWallRunAtLocation(FVector Location) const
 
 bool ATMCharacter::ConsumeMana(float ManaCost)
 {
+    if (bInfiniteManaForTesting) return true;
     if (!HasEnoughMana(ManaCost)) return false;
 
     CurrentMana = FMath::Max(0.0f, CurrentMana - ManaCost);

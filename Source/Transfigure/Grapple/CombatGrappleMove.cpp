@@ -29,7 +29,7 @@ void UCombatGrappleMove::ExecuteMove(ATMCharacter* Instigator, ABaseEnemy* Targe
     // Broadcast event for VFX
     OnMoveExecuted(Instigator, Target, Target->GetActorLocation());
 
-    UE_LOG(LogTemp, Verbose, TEXT("CombatGrappleMove: Executed %s on %s for %f damage"),
+    UE_LOG(LogTemp, Warning, TEXT("[TM] CombatGrappleMove: %s on %s, base damage %.0f"),
         *UEnum::GetValueAsString(MoveType), *Target->GetName(), TotalDamage);
 }
 
@@ -71,38 +71,15 @@ void UCombatGrappleMove::ApplyElementalDamage(ABaseEnemy* Target, ETransfigurati
 
     case ETransfigurationElement::Ice:
     {
-        // Slow — reduce movement speed by 60% for 2 seconds
-        if (CMC)
-        {
-            float OriginalSpeed = CMC->MaxWalkSpeed;
-            CMC->MaxWalkSpeed = OriginalSpeed * 0.4f;
-
-            FTimerHandle SlowTimer;
-            FTimerDelegate RestoreDelegate;
-            RestoreDelegate.BindLambda([CMC, OriginalSpeed]()
-                {
-                    if (CMC) CMC->MaxWalkSpeed = OriginalSpeed;
-                });
-            World->GetTimerManager().SetTimer(SlowTimer, RestoreDelegate, 2.f, false);
-        }
+        // Slow to 40% for 2 seconds. ApplySlow is relative to base speed, so it can't stack.
+        Target->ApplySlow(0.4f, 2.f);
         break;
     }
 
     case ETransfigurationElement::Lightning:
     {
-        // Stun — disable movement entirely for 0.75 seconds
-        if (CMC)
-        {
-            CMC->DisableMovement();
-
-            FTimerHandle StunTimer;
-            FTimerDelegate StunDelegate;
-            StunDelegate.BindLambda([CMC]()
-                {
-                    if (CMC) CMC->SetMovementMode(MOVE_Walking);
-                });
-            World->GetTimerManager().SetTimer(StunTimer, StunDelegate, 0.75f, false);
-        }
+        // Stun for 0.75 seconds.
+        Target->ApplyStun(0.75f);
 
         // Chain to nearby enemies for 30% of damage
         TArray<FOverlapResult> Overlaps;
@@ -168,9 +145,8 @@ void UCombatGrappleMove::ApplyElementalDamage(ABaseEnemy* Target, ETransfigurati
         {
             // Get the instigator direction from velocity context — 
             // knock the enemy away from where they were hit
-            FVector KnockDir = Target->GetActorForwardVector() * -1.f;
-            KnockDir.Z = 0.5f;
-            KnockDir.Normalize();
+            // Back and up relative to the ring (was world Z).
+            const FVector KnockDir = (-Target->GetActorForwardVector() + Target->GetRingUp() * 0.5f).GetSafeNormal();
 
             CMC->AddImpulse(KnockDir * 1500.f, true);
         }

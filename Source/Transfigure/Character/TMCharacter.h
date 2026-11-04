@@ -93,10 +93,14 @@ public:
     float CurrentMana = 100.0f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Mana|Regeneration")
-    float ManaRegenRate = 5.0f;
+    float ManaRegenRate = 15.0f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Mana|Regeneration")
-    float ManaRegenDelay = 2.0f;
+    float ManaRegenDelay = 1.0f;
+
+    /** Testing only: abilities cost no mana. Untick for real balance testing. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Mana")
+    bool bInfiniteManaForTesting = false;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Mana|Combat")
     float ManaOnKill = 10.0f;
@@ -188,6 +192,17 @@ public:
     /** World-space local up at the character's current ring position. States read this instead of FVector::UpVector. */
     UFUNCTION(BlueprintPure, Category = "TM|RingGravity")
     FVector GetRingUp() const { return CachedRingUp; }
+
+    /**
+     * Turn the player to face Direction (flattened to the ground plane) immediately.
+     * The camera keeps looking where it was and eases round over CameraRecenterSpeed,
+     * so gameplay snaps (e.g. grapple -> wall run) don't jerk the view.
+     */
+    void SetFacingDirection(const FVector& Direction);
+
+    /** How fast the camera eases back behind the player after a facing snap (higher = quicker). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|RingGravity")
+    float CameraRecenterSpeed = 8.0f;
 
 
     // ── STATE ──
@@ -413,6 +428,13 @@ private:
     void OnTriggerAllPressed();
     void OnTemporalClapPressed();
     void OnGrapplePressed();
+    void OnGrappleReleased();
+
+    /** View-direction trace on the Weapon channel, starting level with the character (not at the camera). */
+    bool TraceFromView(FHitResult& OutHit, float Range) const;
+
+    /** Shared body of the Kick/Slam/Toss/Pull handlers. */
+    void TryCombatGrapple(ECombatGrappleMove Move);
     void OnGrappleKickPressed();
     void OnGrappleSlamPressed();
     void OnGrappleTossPressed();
@@ -450,6 +472,9 @@ private:
     FVector CachedRingUp = FVector::UpVector;
     FVector CachedFacingForward = FVector::ForwardVector;
     float CameraPitch = 0.0f;
+
+    /** Camera yaw offset (degrees) left over from a facing snap; decays to 0. */
+    float CameraYawOffset = 0.0f;
     float PendingYawInput = 0.0f;
     float PendingPitchInput = 0.0f;
 
