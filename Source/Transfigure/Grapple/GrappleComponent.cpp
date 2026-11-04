@@ -132,6 +132,13 @@ void UGrappleComponent::UpdateSwingPhysics(float DeltaTime)
     // If we hit something, slide along it instead of keeping speed into it.
     FHitResult SweepHit;
     OwnerCharacter->SetActorLocation(NewPos, true, &SweepHit);
+    if (SweepHit.bStartPenetrating)
+    {
+        // Started slightly inside something (usually the floor): a sweep from
+        // inside can't move at all, which felt like sticking. Push out, retry.
+        OwnerCharacter->AddActorWorldOffset(SweepHit.Normal * (SweepHit.PenetrationDepth + 2.f));
+        OwnerCharacter->SetActorLocation(NewPos, true, &SweepHit);
+    }
     if (SweepHit.bBlockingHit)
     {
         SwingVelocity = FVector::VectorPlaneProject(SwingVelocity, SweepHit.ImpactNormal);
@@ -149,6 +156,34 @@ void UGrappleComponent::UpdateSwingPhysics(float DeltaTime)
     {
         ArriveAtWall(Up);
         return;
+    }
+
+    // Overhead/other anchors: no hanging from ceilings. Let go once the rope is
+    // fully reeled in or we touch the anchored surface, keeping momentum (minus
+    // the part pushing into that surface).
+    if (!bWallAnchor)
+    {
+        const bool bTouchedAnchorSurface = SweepHit.bBlockingHit && !AnchorNormal.IsNearlyZero() &&
+            FVector::DotProduct(SweepHit.ImpactNormal, AnchorNormal) > 0.8f;
+        const bool bFullyReeled = SwingRopeLength <= MinRopeLength + 1.f &&
+            FVector::Dist(OwnerCharacter->GetActorLocation(), SwingAnchorPoint) < MinRopeLength + 25.f;
+        if (bTouchedAnchorSurface || bFullyReeled)
+        {
+            if (!AnchorNormal.IsNearlyZero() && FVector::DotProduct(SwingVelocity, AnchorNormal) < 0.f)
+            {
+                SwingVelocity = FVector::VectorPlaneProject(SwingVelocity, AnchorNormal);
+            }
+            const FVector Keep = SwingVelocity;
+            ReleaseGrapple();
+            // Under a ceiling the release hop would push back into it, so skip it there.
+            if (FVector::DotProduct(AnchorNormal, Up) < -0.5f)
+            {
+                CMC->Velocity = Keep;
+            }
+            UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: reached overhead anchor (%s), released at %.0f"),
+                bTouchedAnchorSurface ? TEXT("touched") : TEXT("fully reeled"), Keep.Size());
+            return;
+        }
     }
 
     // Step 7 — Update the visual line endpoint to track current player position
@@ -223,8 +258,12 @@ void UGrappleComponent::StartSlam(FVector Target, FVector TargetNormal, AActor* 
 
     // Reward speed: how fast we're going when V is pressed scales the impact.
     const float EntrySpeed = bIsSwinging ? SwingVelocity.Size() : CMC->Velocity.Size();
-    SlamMomentumScale = FMath::GetMappedRangeValueClamped(
-        FVector2D(SlamMomentumMinSpeed, SlamMomentumMaxSpeed), FVector2D(1.f, SlamMaxMomentumScale), EntrySpeed);
+    const float Alpha = FMath::GetMappedRangeValueClamped(
+        FVector2D(SlamMomentumMinSpeed, SlamMomentumMaxSpeed), FVector2D(0.f, 1.f), EntrySpeed);
+    SlamMomentumScale = FMath::Lerp(1.f, SlamMaxMomentumScale, Alpha);
+
+    // The dive itself gets faster with momentum too, and never slows you down.
+    SlamDiveSpeed = FMath::Max(SlamSpeed * FMath::Lerp(1.f, SlamMaxDiveSpeedScale, Alpha), EntrySpeed * 1.15f);
 
     if (bIsSwinging) ReleaseGrapple();
 
@@ -236,10 +275,10 @@ void UGrappleComponent::StartSlam(FVector Target, FVector TargetNormal, AActor* 
     bIsSlamming = true;
 
     CMC->SetMovementMode(MOVE_Falling);
-    CMC->Velocity = SlamDir * SlamSpeed;
+    CMC->Velocity = SlamDir * SlamDiveSpeed;
 
-    UE_LOG(LogTemp, Warning, TEXT("[TM] Slam: diving at %s (%s), entry speed %.0f -> momentum x%.2f"),
-        *GetNameSafe(TargetActor), bHasTarget ? TEXT("aimed") : TEXT("ground-pound"), EntrySpeed, SlamMomentumScale);
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Slam: diving at %s (%s), entry speed %.0f -> momentum x%.2f, dive speed %.0f"),
+        *GetNameSafe(TargetActor), bHasTarget ? TEXT("aimed") : TEXT("ground-pound"), EntrySpeed, SlamMomentumScale, SlamDiveSpeed);
 }
 
 void UGrappleComponent::UpdateSlam(float DeltaTime)
@@ -257,7 +296,7 @@ void UGrappleComponent::UpdateSlam(float DeltaTime)
     // Impact when: landed, reached the point, got blocked (e.g. hit a wall), or timed out.
     const bool bLanded = SlamElapsed > 0.05f && CMC->IsMovingOnGround();
     const bool bReached = FVector::Dist(Pos, SlamTarget) < Radius + 60.f;
-    const bool bBlocked = SlamElapsed > 0.08f && FVector::DotProduct(CMC->Velocity, SlamDir) < SlamSpeed * 0.3f;
+    const bool bBlocked = SlamElapsed > 0.08f && FVector::DotProduct(CMC->Velocity, SlamDir) < SlamDiveSpeed * 0.3f;
     if (bLanded || bReached || bBlocked || SlamElapsed > SlamMaxTime)
     {
         const FVector Normal = bLanded ? URingFrameUtils::GetUpFor(OwnerCharacter) : SlamTargetNormal;
@@ -266,7 +305,7 @@ void UGrappleComponent::UpdateSlam(float DeltaTime)
     }
 
     // Hold the dive speed so gravity/air friction don't soften it.
-    CMC->Velocity = SlamDir * SlamSpeed;
+    CMC->Velocity = SlamDir * SlamDiveSpeed;
 }
 
 void UGrappleComponent::SlamImpact(const FVector& Location, const FVector& Normal, AActor* Surface)
@@ -385,6 +424,13 @@ void UGrappleComponent::PerformGrappleSwing(FVector AnchorPoint)
 
     ActiveLines.Add(NewLine);
     OnGrappleLineCreated.Broadcast(NewLine);
+
+    // Starting from the ground: lift off a little so the first frames don't scrape the floor.
+    if (OwnerCharacter->GetCharacterMovement()->IsMovingOnGround())
+    {
+        OwnerCharacter->AddActorWorldOffset(Up * 10.f, true);
+        SwingVelocity += Up * GroundLiftSpeed;
+    }
 
     // Pause CharacterMovement so it doesn't fight the swing physics.
     OwnerCharacter->GetCharacterMovement()->SetMovementMode(MOVE_None);

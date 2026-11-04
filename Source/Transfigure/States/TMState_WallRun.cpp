@@ -76,6 +76,9 @@ void TMState_WallRun::Enter()
     const FVector V = URingFrameUtils::StripVertical(Owner->GetVelocity(), Owner->GetRingUp());
     CMC->Velocity = V;
 
+    // Keep whatever speed we arrived with (never slower than the base wall-run speed).
+    RunSpeed = FMath::Max(V.Size(), Owner->WallRunSpeed);
+
     CMC->GravityScale = Owner->WallRunGravityScale;
     Owner->JumpsRemaining = 1; // Allow one wall jump
 }
@@ -118,7 +121,9 @@ void TMState_WallRun::Tick(float DeltaTime)
             FVector::VectorPlaneProject(Owner->GetActorForwardVector(), WallNormal), Up).GetSafeNormal();
     }
 
-    CMC->Velocity = WallForward * Owner->WallRunSpeed;
+    // Build speed the longer the run lasts. Arrival speed above the cap is kept, not cut.
+    RunSpeed = FMath::Max(RunSpeed, FMath::Min(RunSpeed + Owner->WallRunAcceleration * DeltaTime, Owner->WallRunMaxSpeed));
+    CMC->Velocity = WallForward * RunSpeed;
 }
 
 void TMState_WallRun::Exit()

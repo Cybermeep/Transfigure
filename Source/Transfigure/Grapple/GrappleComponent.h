@@ -69,6 +69,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Wall")
     float WallMaxTiltDegrees = 30.f;
 
+    /** Extra upward speed when a grapple starts from the ground, so you don't scrape along the floor. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel")
+    float GroundLiftSpeed = 500.f;
+
     /** The rope never reels shorter than this. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel")
     float MinRopeLength = 300.f;
@@ -171,6 +175,10 @@ public:
     /** Multiplier on radius, damage and knockback at full momentum. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Slam|Momentum")
     float SlamMaxMomentumScale = 2.0f;
+
+    /** Dive speed multiplier at full momentum (dive is also never slower than 1.15x your entry speed). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Slam|Momentum")
+    float SlamMaxDiveSpeedScale = 1.8f;
 
     /** A slam that hasn't hit anything after this long impacts where it is. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Slam")
@@ -279,6 +287,7 @@ private:
 
     bool bIsSlamming = false;
     float SlamMomentumScale = 1.f;
+    float SlamDiveSpeed = 0.f;
     float SlamElapsed = 0.f;
     FVector SlamTarget = FVector::ZeroVector;
     FVector SlamTargetNormal = FVector::ZeroVector;

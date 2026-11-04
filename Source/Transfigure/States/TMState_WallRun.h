@@ -25,4 +25,7 @@ private:
     FVector WallNormal;
     bool bWallOnLeft = false;
     int32 JumpsAtEntry = 0;
+
+    /** Current run speed: starts at the arrival speed (at least WallRunSpeed) and accelerates. */
+    float RunSpeed = 0.f;
 };

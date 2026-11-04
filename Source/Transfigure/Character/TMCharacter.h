@@ -44,6 +44,14 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement")
     float WallRunSpeed = 850.f;
 
+    /** Wall runs speed up the longer they last (cm/s per second). Rewards keeping momentum. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|WallRun")
+    float WallRunAcceleration = 450.f;
+
+    /** Wall run speed cap. Arriving faster than this (e.g. a wall grapple) keeps the arrival speed. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|WallRun")
+    float WallRunMaxSpeed = 2400.f;
+
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement")
     float WallJumpLateralBoost = 500.f;
 
