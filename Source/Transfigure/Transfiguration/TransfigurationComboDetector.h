@@ -62,5 +62,7 @@ private:
 
     void CheckForCombos(const TArray<TObjectPtr<ASigilActor>>& Sigils);
     bool MatchesRecipe(ETransfigurationElement A, ETransfigurationElement B, FName& OutResultID) const;
-    TSet<TTuple<ASigilActor*, ASigilActor*>> FiredCombosThisFrame;
+    /** Pairs that already fired. A pair fires once and stays "fired" while both sigils are armed
+     *  (was cleared every frame, so a combo fired every frame). */
+    TSet<TTuple<TWeakObjectPtr<ASigilActor>, TWeakObjectPtr<ASigilActor>>> FiredCombos;
 };

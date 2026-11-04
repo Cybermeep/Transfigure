@@ -173,24 +173,8 @@ void AGrappleLine::ApplyIceEffect(FVector Location)
         ABaseEnemy* Enemy = Cast<ABaseEnemy>(Overlap.GetActor());
         if (!Enemy) continue;
 
-        // Slow enemy movement by 50% for 2 seconds via movement component
-        UCharacterMovementComponent* CMC =
-            Enemy->FindComponentByClass<UCharacterMovementComponent>();
-        if (CMC)
-        {
-            float OriginalSpeed = CMC->MaxWalkSpeed;
-            CMC->MaxWalkSpeed = OriginalSpeed * 0.5f;
-
-            // Restore speed after delay
-            FTimerHandle RestoreTimer;
-            FTimerDelegate RestoreDelegate;
-            RestoreDelegate.BindLambda([CMC, OriginalSpeed]()
-                {
-                    if (CMC)
-                        CMC->MaxWalkSpeed = OriginalSpeed;
-                });
-            World->GetTimerManager().SetTimer(RestoreTimer, RestoreDelegate, 2.f, false);
-        }
+        // Slow to 50% for 2 seconds (relative to base speed, so it can't stack).
+        Enemy->ApplySlow(0.5f, 2.f);
     }
 }
 
@@ -224,24 +208,9 @@ void AGrappleLine::ApplyLightningEffect(FVector Location)
         ABaseEnemy* Enemy = Cast<ABaseEnemy>(Overlap.GetActor());
         if (!Enemy) continue;
 
-        // Apply damage and briefly stun via movement
+        // Apply damage and briefly stun
         Enemy->TakePoolDamage(15.f, Location);
-
-        UCharacterMovementComponent* CMC =
-            Enemy->FindComponentByClass<UCharacterMovementComponent>();
-        if (CMC)
-        {
-            CMC->DisableMovement();
-
-            FTimerHandle StunTimer;
-            FTimerDelegate StunDelegate;
-            StunDelegate.BindLambda([CMC]()
-                {
-                    if (CMC)
-                        CMC->SetMovementMode(MOVE_Walking);
-                });
-            World->GetTimerManager().SetTimer(StunTimer, StunDelegate, 0.75f, false);
-        }
+        Enemy->ApplyStun(0.75f);
     }
 }
 

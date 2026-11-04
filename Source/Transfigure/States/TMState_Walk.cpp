@@ -11,7 +11,7 @@
 void TMState_Walk::Enter()
 {
     Owner->SetStateName("Walk");
-    Owner->GetCharacterMovement()->MaxWalkSpeed = Owner->WalkSpeed;
+    Owner->SetBaseWalkSpeed(Owner->WalkSpeed);  // keeps any speed buff applied
 }
 
 void TMState_Walk::Tick(float DeltaTime)

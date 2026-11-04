@@ -108,24 +108,9 @@ void UIceWallEffect::SpawnIceTrail(AActor* Instigator, float Duration)
 
             Enemy->TakePoolDamage(5.f, TrailPoint);
 
-            UCharacterMovementComponent* CMC =
-                Enemy->FindComponentByClass<UCharacterMovementComponent>();
-            if (CMC && CMC->MaxWalkSpeed > 100.f)
-            {
-                float SlowedSpeed = CMC->MaxWalkSpeed * 0.4f;
-                CMC->MaxWalkSpeed = SlowedSpeed;
-
-                FTimerHandle RestoreTimer;
-                FTimerDelegate RestoreDelegate;
-                TWeakObjectPtr<UCharacterMovementComponent> WeakCMC(CMC);
-                float OrigSpeed = CMC->MaxWalkSpeed / 0.4f;
-                RestoreDelegate.BindLambda([WeakCMC, OrigSpeed]()
-                    {
-                        if (WeakCMC.IsValid())
-                            WeakCMC->MaxWalkSpeed = OrigSpeed;
-                    });
-                World->GetTimerManager().SetTimer(RestoreTimer, RestoreDelegate, 3.f, false);
-            }
+            // Was: save the (possibly already slowed) speed and restore it later,
+            // which stacked down to a crawl. ApplySlow is always relative to base speed.
+            Enemy->ApplySlow(0.4f, 3.f);
         }
     }
 

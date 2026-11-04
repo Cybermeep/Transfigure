@@ -106,6 +106,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Mana|Regeneration")
     float ManaRegenDelay = 1.0f;
 
+    /** Spell the Draw Sigil key starts. Change it to test other spells from DA_SpellRegistry. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Magic")
+    FName DrawSigilSpellID = TEXT("FireBlast");
+
     /** Testing only: abilities cost no mana. Untick for real balance testing. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Mana")
     bool bInfiniteManaForTesting = false;
@@ -333,6 +337,18 @@ public:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat")
     TObjectPtr<UWeaponComponent> WeaponComponent;
 
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Magic")
+    TObjectPtr<UBuffEffectComponent> BuffEffects;
+
+    /** Speed buff multiplier (1 = none). */
+    float GetSpeedBuffMultiplier() const;
+
+    /** Movement states call this with WalkSpeed / SprintSpeed; buffs are applied on top. */
+    void SetBaseWalkSpeed(float NewBase);
+
+    /** Re-apply MaxWalkSpeed = base speed x speed buff (called when buffs change). */
+    void RefreshMovementSpeed();
+
     // ── STATE MANAGEMENT ──
     void SetStateName(const FString& Name) { CurrentStateName = Name; }
 
@@ -483,6 +499,9 @@ private:
 
     /** Camera yaw offset (degrees) left over from a facing snap; decays to 0. */
     float CameraYawOffset = 0.0f;
+
+    float BaseWalkSpeed = 600.f;
+    FTimerHandle DamageBuffTimerHandle;
     float PendingYawInput = 0.0f;
     float PendingPitchInput = 0.0f;
 

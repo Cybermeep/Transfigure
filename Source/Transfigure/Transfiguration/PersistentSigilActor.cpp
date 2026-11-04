@@ -68,10 +68,11 @@ void APersistentSigilActor::ApplyHealingToOverlappingActors()
     for (AActor* Actor : OverlappingActors)
     {
         ATMCharacter* TMChar = Cast<ATMCharacter>(Actor);
-        if (TMChar && TMChar != Caster.Get())
+        if (TMChar)  // was "&& TMChar != Caster", which skipped the only player
         {
             float NewHealth = TMChar->GetHealth() + HealRate;
             TMChar->SetHealth(FMath::Min(NewHealth, TMChar->GetMaxHealth()));
+            UE_LOG(LogTemp, Warning, TEXT("[TM] Healing sigil: player health %.0f"), TMChar->GetHealth());
         }
     }
 }

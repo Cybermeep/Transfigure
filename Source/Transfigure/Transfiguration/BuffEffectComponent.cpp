@@ -42,7 +42,9 @@ void UBuffEffectComponent::ApplyBuff(EBuffType BuffType, float Multiplier, float
     switch (BuffType)
     {
     case EBuffType::Speed:
-        TMChar->GetCharacterMovement()->MaxWalkSpeed *= Multiplier;
+        // Was MaxWalkSpeed *= Multiplier, which movement states then overwrote
+        // (and the matching /= on expiry left the player permanently slow).
+        TMChar->RefreshMovementSpeed();
         break;
     case EBuffType::Jump:
         TMChar->JumpZVelocity *= Multiplier;
@@ -51,6 +53,8 @@ void UBuffEffectComponent::ApplyBuff(EBuffType BuffType, float Multiplier, float
         break;
     }
 
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Buff applied: %s x%.2f for %.1fs"),
+        *UEnum::GetValueAsString(BuffType), Multiplier, Duration);
     OnBuffApplied.Broadcast(BuffType, Duration);
 }
 
@@ -63,19 +67,22 @@ void UBuffEffectComponent::RemoveBuff(EBuffType BuffType)
     {
         if (ActiveBuffs[i].Type == BuffType)
         {
+            const float Multiplier = ActiveBuffs[i].Multiplier;
+            ActiveBuffs.RemoveAt(i);
+
             switch (BuffType)
             {
             case EBuffType::Speed:
-                TMChar->GetCharacterMovement()->MaxWalkSpeed /= ActiveBuffs[i].Multiplier;
+                TMChar->RefreshMovementSpeed();  // buff is gone now, so this restores base speed
                 break;
             case EBuffType::Jump:
-                TMChar->JumpZVelocity /= ActiveBuffs[i].Multiplier;
+                if (!FMath::IsNearlyZero(Multiplier)) TMChar->JumpZVelocity /= Multiplier;
                 break;
             default:
                 break;
             }
 
-            ActiveBuffs.RemoveAt(i);
+            UE_LOG(LogTemp, Warning, TEXT("[TM] Buff expired: %s"), *UEnum::GetValueAsString(BuffType));
             OnBuffExpired.Broadcast(BuffType);
             return;
         }

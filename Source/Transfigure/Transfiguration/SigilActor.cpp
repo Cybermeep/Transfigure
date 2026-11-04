@@ -118,6 +118,7 @@ void ASigilActor::ExecuteSpellEffect()
     if (!SpellDef || !SpellDef->EffectClass) return;
 
     bArmed = false;
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Sigil fired: %s at %s"), *SpellDef->SpellID.ToString(), *GetActorLocation().ToString());
 
     UTransfigurationEffectBase* Effect = NewObject<UTransfigurationEffectBase>(
         this, SpellDef->EffectClass);

@@ -49,6 +49,8 @@ ATMCharacter::ATMCharacter()
         TEXT("GrappleComponent"));
     WeaponComponent = CreateDefaultSubobject<UWeaponComponent>(
         TEXT("WeaponComponent"));
+    BuffEffects = CreateDefaultSubobject<UBuffEffectComponent>(
+        TEXT("BuffEffects"));
 }
 
 void ATMCharacter::BeginPlay()
@@ -330,7 +332,7 @@ void ATMCharacter::OnFirePressed()
 
 void ATMCharacter::OnDrawSigilPressed()
 {
-    TransfigurationCasting->BeginDrawMode(FName("FireBlast"));
+    TransfigurationCasting->BeginDrawMode(DrawSigilSpellID);
 }
 
 void ATMCharacter::OnPlaceSigilPressed()
@@ -653,20 +655,24 @@ void ATMCharacter::ActivateTemporalClap()
     GetWorldTimerManager().SetTimer(
         ClapAnimationTimerHandle,
         this, &ATMCharacter::ExecuteClapSigilActivation,
-        ClapAnimationDuration,
+        ClapAnimationDuration * TemporalTimeDilation,  // real seconds while the world is slowed
         false);
 
     GetWorldTimerManager().SetTimer(
         TemporalTimerHandle,
         this, &ATMCharacter::EndTemporalClap,
-        TemporalClapDuration,
+        TemporalClapDuration * TemporalTimeDilation,   // real seconds while the world is slowed
         false);
+
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Temporal Clap: started, %d sigils, %.1fs real time"),
+        SigilCount, TemporalClapDuration);
 }
 
 void ATMCharacter::StartTemporalEffects()
 {
+    // Slow the world, keep the player at normal speed inside it.
     UGameplayStatics::SetGlobalTimeDilation(GetWorld(), TemporalTimeDilation);
-    CustomTimeDilation = 1.0f;
+    CustomTimeDilation = 1.f / FMath::Max(TemporalTimeDilation, 0.01f);
 
     APlayerController* PC = Cast<APlayerController>(GetController());
     if (PC && PC->PlayerCameraManager)
@@ -698,6 +704,7 @@ void ATMCharacter::EndTemporalClap()
 
     UGameplayStatics::SetGlobalTimeDilation(GetWorld(), 1.0f);
     CustomTimeDilation = 1.0f;
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Temporal Clap: ended"));
 
     EndTemporalEffects();
     OnTemporalClapEnded.Broadcast();
@@ -743,11 +750,28 @@ void ATMCharacter::ApplyDamageBuff(float Multiplier, float Duration)
 {
     CurrentDamageMultiplier = Multiplier;
 
-    FTimerHandle UnusedHandle;
-    GetWorldTimerManager().SetTimer(UnusedHandle, [this]()
+    // Member handle: a new buff restarts the timer instead of an older one ending it early.
+    GetWorldTimerManager().SetTimer(DamageBuffTimerHandle, [this]()
         {
             CurrentDamageMultiplier = 1.0f;
         }, Duration, false);
+}
+
+float ATMCharacter::GetSpeedBuffMultiplier() const
+{
+    return BuffEffects ? BuffEffects->GetBuffMultiplier(EBuffType::Speed) : 1.f;
+}
+
+void ATMCharacter::SetBaseWalkSpeed(float NewBase)
+{
+    BaseWalkSpeed = NewBase;
+    RefreshMovementSpeed();
+}
+
+void ATMCharacter::RefreshMovementSpeed()
+{
+    // One place computes max speed, so state changes and buffs can't overwrite each other.
+    GetCharacterMovement()->MaxWalkSpeed = BaseWalkSpeed * GetSpeedBuffMultiplier();
 }
 void ATMCharacter::OnSprintStarted()
 {

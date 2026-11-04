@@ -20,7 +20,16 @@ void UTransfigurationComboDetector::TickComponent(
 {
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-    FiredCombosThisFrame.Empty();
+    // Forget pairs whose sigils are gone or have fired, so new pairs can combo.
+    for (auto It = FiredCombos.CreateIterator(); It; ++It)
+    {
+        const bool bAValid = It->Key.IsValid() && It->Key->IsArmed();
+        const bool bBValid = It->Value.IsValid() && It->Value->IsArmed();
+        if (!bAValid || !bBValid)
+        {
+            It.RemoveCurrent();
+        }
+    }
 
     auto* Owner = GetOwner();
     if (!Owner) return;
@@ -50,31 +59,23 @@ void UTransfigurationComboDetector::CheckForCombos(
             if (FVector::Dist(A->GetActorLocation(), B->GetActorLocation()) > ComboProximityRadius)
                 continue;
 
-            auto Pair = TTuple<ASigilActor*, ASigilActor*>(A, B);
-            if (FiredCombosThisFrame.Contains(Pair)) continue;
+            const TTuple<TWeakObjectPtr<ASigilActor>, TWeakObjectPtr<ASigilActor>> Pair(A, B);
+            if (FiredCombos.Contains(Pair)) continue;
 
             FName ComboID;
             if (MatchesRecipe(DefA->Element, DefB->Element, ComboID) ||
                 MatchesRecipe(DefB->Element, DefA->Element, ComboID))
             {
-                FiredCombosThisFrame.Add(Pair);
+                FiredCombos.Add(Pair);
+                UE_LOG(LogTemp, Warning, TEXT("[TM] Combo: %s + %s -> %s"),
+                    *A->GetName(), *B->GetName(), *ComboID.ToString());
                 OnComboDetected.Broadcast(ComboID);
             }
         }
     }
 
-    // Update chain detection
-    for (const auto& Sigil : Sigils)
-    {
-        if (Sigil.Get() && Sigil->IsArmed())
-        {
-            auto* Def = Sigil->GetSpellDefinition();
-            if (Def && !CurrentChain.ExpectedResultID.IsNone())
-            {
-                AddToComboChain(Def->Element);
-            }
-        }
-    }
+    // (Removed the "Update chain detection" loop: it re-added the same sigils
+    // every frame, and nothing calls StartComboChain yet.)
 }
 
 bool UTransfigurationComboDetector::MatchesRecipe(

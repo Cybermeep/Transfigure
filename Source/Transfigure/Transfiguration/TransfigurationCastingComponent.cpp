@@ -10,6 +10,7 @@
 #include "GameFramework/Character.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
+#include "DrawDebugHelpers.h"
 
 UTransfigurationCastingComponent::UTransfigurationCastingComponent()
 {
@@ -27,9 +28,35 @@ void UTransfigurationCastingComponent::TickComponent(
     {
         PerformAimTrace(CurrentAimHit);
         OnAimUpdated.Broadcast(CurrentState);
+
+#if !UE_BUILD_SHIPPING
+        // Placement preview until there's a real sigil ghost: magenta = valid spot.
+        if (CurrentAimHit.bBlockingHit)
+        {
+            DrawDebugCircle(GetWorld(), CurrentAimHit.ImpactPoint + CurrentAimHit.ImpactNormal * 2.f, 60.f, 24,
+                FColor::Magenta, false, -1.f, 0, 3.f,
+                FVector::CrossProduct(CurrentAimHit.ImpactNormal, FVector::RightVector).GetSafeNormal(),
+                FVector::CrossProduct(CurrentAimHit.ImpactNormal, FVector::ForwardVector).GetSafeNormal(), false);
+        }
+#endif
     }
 
     CleanupDestroyedSigils();
+
+#if !UE_BUILD_SHIPPING
+    // Sigils have no visuals yet: draw each armed one as a ring the size of its trigger radius.
+    for (const TObjectPtr<ASigilActor>& SigilPtr : ActiveSigils)
+    {
+        const ASigilActor* Sigil = SigilPtr.Get();
+        if (!Sigil || !Sigil->IsArmed() || !Sigil->GetSpellDefinition()) continue;
+        const UTransfigurationDefinition* Def = Sigil->GetSpellDefinition();
+        const FColor Color = Def->bIsHealingSigil ? FColor::Green : Def->bIsBuffSigil ? FColor::Cyan : FColor::Red;
+        const FVector N = Sigil->GetActorForwardVector();  // sigils face along the surface normal
+        DrawDebugCircle(GetWorld(), Sigil->GetActorLocation(), Def->TriggerRadius, 32, Color, false, -1.f, 0, 2.f,
+            FVector::CrossProduct(N, FVector::RightVector).GetSafeNormal(),
+            FVector::CrossProduct(N, FVector::ForwardVector).GetSafeNormal(), false);
+    }
+#endif
 }
 
 bool UTransfigurationCastingComponent::PerformAimTrace(FHitResult& OutHit) const
@@ -41,13 +68,17 @@ bool UTransfigurationCastingComponent::PerformAimTrace(FHitResult& OutHit) const
     FRotator CamRot;
     Char->GetController()->GetPlayerViewPoint(CamLoc, CamRot);
 
-    FVector TraceEnd = CamLoc + CamRot.Vector() * MaxPlacementDistance;
+    // Start level with the character so walls behind the player can't catch the trace.
+    const FVector Dir = CamRot.Vector();
+    const float ToChar = FMath::Max(FVector::DotProduct(Char->GetActorLocation() - CamLoc, Dir), 0.f);
+    const FVector Start = CamLoc + Dir * ToChar;
+    const FVector TraceEnd = Start + Dir * MaxPlacementDistance;
 
     FCollisionQueryParams Params;
     Params.AddIgnoredActor(GetOwner());
 
     return GetWorld()->LineTraceSingleByChannel(
-        OutHit, CamLoc, TraceEnd, ECC_WorldStatic, Params);
+        OutHit, Start, TraceEnd, ECC_WorldStatic, Params);
 }
 
 bool UTransfigurationCastingComponent::CanAffordSpell(FName SpellID) const
@@ -107,6 +138,7 @@ void UTransfigurationCastingComponent::BeginDrawMode(FName SpellID)
 
     LastSpellManaCost = GetSpellManaCost(SpellID);
     ActiveSpellID = SpellID;
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Draw mode: %s (cost %.0f)"), *SpellID.ToString(), LastSpellManaCost);
     TransitionToState(ECastingState::Drawing);
     OnDrawModeEntered(SpellID);
 }
@@ -151,15 +183,26 @@ void UTransfigurationCastingComponent::ConfirmPlacement()
     SpawnParams.SpawnCollisionHandlingOverride =
         ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
+    // Spell can pick its own sigil class (e.g. a Blueprint subclass);
+    // otherwise persistent spells get the persistent sigil, others the plain one.
+    TSubclassOf<ASigilActor> SigilClass = SpellDef->SigilActorClass;
+    if (!SigilClass)
+    {
+        SigilClass = SpellDef->bIsPersistentSigil
+            ? TSubclassOf<ASigilActor>(APersistentSigilActor::StaticClass())
+            : TSubclassOf<ASigilActor>(ASigilActor::StaticClass());
+    }
+
     ASigilActor* Sigil = GetWorld()->SpawnActor<ASigilActor>(
-        ASigilActor::StaticClass(),
-        SpawnLoc, SigilRot, SpawnParams);
+        SigilClass, SpawnLoc, SigilRot, SpawnParams);
 
     if (Sigil)
     {
         Sigil->Initialize(SpellDef, GetOwner());
         ActiveSigils.Add(Sigil);
         OnPlacementConfirmed(Sigil);
+        UE_LOG(LogTemp, Warning, TEXT("[TM] Sigil placed: %s (%s) on %s, %d active"),
+            *ActiveSpellID.ToString(), *SigilClass->GetName(), *GetNameSafe(CurrentAimHit.GetActor()), ActiveSigils.Num());
     }
 
     TransitionToState(ECastingState::Idle);
@@ -235,20 +278,34 @@ void UTransfigurationCastingComponent::TriggerSigilsSynchronized()
     {
         if (!Sigil || !Sigil->IsArmed()) continue;
 
-        FTimerHandle DelayHandle;
-        FTimerDelegate Delegate = FTimerDelegate::CreateLambda([this, Sigil]()
-            {
-                if (Sigil && Sigil->IsArmed())
-                {
-                    OnSigilTemporalActivate.Broadcast(Sigil);
-                    Sigil->TriggerManual();
-                }
-            });
+        if (CurrentDelay <= 0.f)
+        {
+            // A timer with 0 delay never fires, so the first sigil goes off now.
+            OnSigilTemporalActivate.Broadcast(Sigil);
+            Sigil->TriggerManual();
+        }
+        else
+        {
+            TWeakObjectPtr<ThisClass> WeakThis(this);
+            TWeakObjectPtr<ASigilActor> WeakSigil(Sigil);
 
-        GetWorld()->GetTimerManager().SetTimer(DelayHandle, Delegate, CurrentDelay, false);
+            FTimerHandle DelayHandle;
+            GetWorld()->GetTimerManager().SetTimer(DelayHandle,
+                FTimerDelegate::CreateLambda([WeakThis, WeakSigil]()
+                {
+                    if (WeakThis.IsValid() && WeakSigil.IsValid() && WeakSigil->IsArmed())
+                    {
+                        WeakThis->OnSigilTemporalActivate.Broadcast(WeakSigil.Get());
+                        WeakSigil->TriggerManual();
+                    }
+                }),
+                CurrentDelay, false);
+        }
+
         CurrentDelay += DelayBetween;
     }
 
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Temporal Clap: triggering %d sigils"), PendingTemporalSigils.Num());
     PendingTemporalSigils.Empty();
 }
 

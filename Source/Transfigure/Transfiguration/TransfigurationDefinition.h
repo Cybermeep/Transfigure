@@ -8,6 +8,7 @@
 #include "TransfigurationDefinition.generated.h"
 
 class UTransfigurationEffectBase;
+class ASigilActor;
 class UNiagaraSystem;
 class USoundBase;
 
@@ -117,6 +118,11 @@ public:
 
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Sigil")
         float TimeToLive = 30.f;
+
+    /** Optional override. Empty uses the native class that fits this spell
+     *  (persistent sigil if Is Persistent Sigil, otherwise the plain sigil). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Sigil")
+        TSubclassOf<ASigilActor> SigilActorClass;
 
     // Spell Power
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Power")
