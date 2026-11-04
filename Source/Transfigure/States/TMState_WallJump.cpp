@@ -7,6 +7,8 @@
 #include "States/TMState_Walk.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "RingFrameUtils.h"
+#include "States/TMState_DoubleJump.h"
+#include "States/TMState_WallRun.h"
 
 void TMState_WallJump::Enter()
 {
@@ -22,11 +24,18 @@ void TMState_WallJump::Enter()
     // the lateral push needs no change. Only the vertical component did --
     // was LaunchVelocity.Z = JumpZVelocity, which meant world Z.
     const FVector Up = Owner->GetRingUp();
-    FVector LaunchVelocity = -Owner->GetActorForwardVector() * Owner->WallJumpLateralBoost;
-    LaunchVelocity = URingFrameUtils::SetVertical(LaunchVelocity, Up, Owner->JumpZVelocity);
+    FVector WallNormal;
+    bool bWallOnLeft = false;
+
+    const FVector Push = TMState_WallRun::DetectWall(Owner, WallNormal, bWallOnLeft)
+        ? WallNormal * Owner->WallJumpLateralBoost
+        : -Owner->GetActorForwardVector() * Owner->WallJumpLateralBoost;
+
+    const FVector Planar = URingFrameUtils::StripVertical(Owner->GetVelocity(), Up);
+    const FVector LaunchVelocity = URingFrameUtils::SetVertical(Planar + Push, Up, Owner->JumpZVelocity);
 
     Owner->LaunchCharacter(LaunchVelocity, true, true);
-    Owner->JumpsRemaining = 1; // Preserve one double jump after wall jump
+    Owner->JumpsRemaining = 1;
 }
 
 void TMState_WallJump::Tick(float DeltaTime)
@@ -37,6 +46,11 @@ void TMState_WallJump::Tick(float DeltaTime)
     // This prevents a one frame flicker where the downward arc of the wall
     // jump immediately triggers the Z < 0 ground check.
     if (AirTime < MinAirTime) return;
+    if (Owner->JumpsRemaining < 1)
+    {
+        Owner->TransitionTo<TMState_DoubleJump>();
+        return;
+    }
 
     if (Owner->GetCharacterMovement()->IsMovingOnGround())
     {

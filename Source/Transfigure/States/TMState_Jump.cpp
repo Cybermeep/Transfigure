@@ -1,5 +1,4 @@
 // Source/TMovement/Private/States/TMState_Jump.cpp
-// Source/TMovement/Private/States/TMState_Jump.cpp
 
 #include "States/TMState_Jump.h"
 #include "Character/TMCharacter.h"
@@ -24,11 +23,21 @@ void TMState_Jump::Enter()
     Owner->LaunchCharacter(NewVelocity, true, true);
 }
 
+// Falling without a launch: walking off a ledge, leaving a wall, etc.
+// Shares Tick/Exit with TMState_Jump.
+void TMState_Fall::Enter()
+{
+    Owner->SetStateName("Fall");
+}
+
 void TMState_Jump::Tick(float DeltaTime)
 {
     auto* CMC = Owner->GetCharacterMovement();
+    StateTime += DeltaTime;
 
-    if (CMC->IsMovingOnGround())
+    // The launch is only applied on the next movement tick, so for a moment
+    // after Enter the character still reads as grounded. Ignore that window.
+    if (StateTime > 0.1f && CMC->IsMovingOnGround())
     {
         Owner->JumpsRemaining = 2;
         Owner->TransitionTo<TMState_Walk>();

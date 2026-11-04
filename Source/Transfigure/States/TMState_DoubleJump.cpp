@@ -6,6 +6,7 @@
 #include "States/TMState_WallRun.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "RingFrameUtils.h"
+#include "States/TMState_Walk.h"
 
 void TMState_DoubleJump::Enter()
 {
@@ -27,7 +28,7 @@ void TMState_DoubleJump::Tick(float DeltaTime)
     if (Owner->GetCharacterMovement()->IsMovingOnGround())
     {
         Owner->JumpsRemaining = 2;
-        Owner->TransitionTo<TMState_Jump>();
+        Owner->TransitionTo<TMState_Walk>();
         return;
     }
 

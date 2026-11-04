@@ -58,9 +58,7 @@ void ABaseEnemy::UpdateRingGravity(float DeltaTime)
         Forward = FVector::CrossProduct(FVector::RightVector, CachedRingUp).GetSafeNormal();
     }
 
-    const FVector Right = FVector::CrossProduct(Forward, CachedRingUp).GetSafeNormal();
-    const FMatrix Basis(Forward, Right, CachedRingUp, FVector::ZeroVector);
-    SetActorRotation(Basis.ToQuat());
+    SetActorRotation(FRotationMatrix::MakeFromXZ(Forward, CachedRingUp).ToQuat());
 }
 
 void ABaseEnemy::OnSpawnFromPool()

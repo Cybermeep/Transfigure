@@ -29,7 +29,7 @@ void TMState_Idle::Tick(float DeltaTime)
     if (!CMC->IsMovingOnGround())
     {
         Owner->JumpsRemaining = 1; // Walked off edge = no double jump
-        Owner->TransitionTo<TMState_Jump>();
+        Owner->TransitionTo<TMState_Fall>();
         return;
     }
 }

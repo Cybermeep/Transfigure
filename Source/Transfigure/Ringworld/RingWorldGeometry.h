@@ -63,6 +63,10 @@ struct FRingWorldSpec
 {
 	GENERATED_BODY()
 
+	/** Treat the level as flat: down is -Z and altitude is world Z. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RingWorld")
+	bool bFlatWorldForTesting = false;
+
 	/** Spin axis to inner habitable surface. Default 1,600 km. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RingWorld", meta = (ClampMin = "100000.0"))
 	double Radius = 1.6e8;

@@ -12,6 +12,8 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
+#include "InputMappingContext.h"
+#include "GameFramework/SpringArmComponent.h"
 #include "Transfiguration/TransfigurationCastingComponent.h"
 #include "Transfiguration/TransfigurationComboDetector.h"
 #include "Transfiguration/BuffEffectComponent.h"
@@ -47,20 +49,63 @@ ATMCharacter::ATMCharacter()
 void ATMCharacter::BeginPlay()
 {
     Super::BeginPlay();
+    UE_LOG(LogTemp, Warning, TEXT("[TM] BeginPlay  Controller=%s  Mapping=%s  Loc=%s  Flat=%d"),
+        *GetNameSafe(GetController()), *GetNameSafe(DefaultMappingContext),
+        *GetActorLocation().ToString(), URingWorldSettings::GetSpec().bFlatWorldForTesting ? 1 : 0);
 
-    if (APlayerController* PC = Cast<APlayerController>(GetController()))
+
+    // The camera pitches via CameraPitchTarget and yaws with the actor; it must
+    // NOT follow ControlRotation (which this class never changes). If the
+    // Blueprint didn't assign a target, use its SpringArm.
+    if (!CameraPitchTarget)
     {
-        if (auto* Sub = ULocalPlayer::GetSubsystem<
-            UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
-        {
-            Sub->AddMappingContext(DefaultMappingContext, 0);
-        }
+        CameraPitchTarget = FindComponentByClass<USpringArmComponent>();
+    }
+    if (USpringArmComponent* Arm = Cast<USpringArmComponent>(CameraPitchTarget))
+    {
+        Arm->bUsePawnControlRotation = false;
+        Arm->bInheritPitch = true;
+        Arm->bInheritYaw = true;
+        Arm->bInheritRoll = true;
+    }
+    if (!CameraPitchTarget)
+    {
+        UE_LOG(LogTemp, Error, TEXT("[TM] No CameraPitchTarget and no SpringArm on %s - camera pitch will not work"), *GetName());
+    }
+    if (!GetMesh() || !GetMesh()->GetSkeletalMeshAsset())
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[TM] %s has no skeletal mesh assigned - the player will be invisible"), *GetName());
     }
 
+    // Keep the Player Start's facing instead of snapping to world +X.
+    CachedFacingForward = GetActorForwardVector();
     TransitionTo<TMState_Idle>();
 
     CurrentMana = StartingMana;
     StartManaRegen();
+}
+
+// Runs whenever a controller possesses/unpossesses this pawn. Possession can
+// happen after BeginPlay, so the input mapping is added here, not in BeginPlay.
+void ATMCharacter::NotifyControllerChanged()
+{
+    Super::NotifyControllerChanged();
+    UE_LOG(LogTemp, Warning, TEXT("[TM] NotifyControllerChanged  Controller=%s"), *GetNameSafe(GetController()));
+
+    if (APlayerController* PC = Cast<APlayerController>(GetController()))
+    {
+        if (auto* Sub = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
+        {
+            if (DefaultMappingContext)
+            {
+                Sub->AddMappingContext(DefaultMappingContext, 0);
+            }
+            else
+            {
+                UE_LOG(LogTemp, Error, TEXT("[TM] DefaultMappingContext is not set on %s"), *GetClass()->GetName());
+            }
+        }
+    }
 }
 
 void ATMCharacter::Tick(float DeltaTime)
@@ -68,6 +113,32 @@ void ATMCharacter::Tick(float DeltaTime)
     Super::Tick(DeltaTime);
     UpdateRingGravity(DeltaTime);
     StateMachine.Tick(DeltaTime);
+#if !UE_BUILD_SHIPPING
+    // [TM] diagnostics. Remove once movement is confirmed.
+    // Every state change, with jumps left, so mid-air relaunches can be traced.
+    static FString LastLoggedState;
+    if (CurrentStateName != LastLoggedState)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[TM] State %s -> %s  JumpsRemaining=%d  Z=%.0f  Grounded=%d"),
+            *LastLoggedState, *CurrentStateName, JumpsRemaining, GetActorLocation().Z,
+            GetCharacterMovement()->IsMovingOnGround() ? 1 : 0);
+        LastLoggedState = CurrentStateName;
+    }
+
+    // Once per second: position, velocity, movement mode, gravity.
+    static double LastTMLog = -10.0;
+    const double Now = GetWorld()->GetRealTimeSeconds();
+    if (Now < LastTMLog) LastTMLog = -10.0; // new PIE session
+    if (Now - LastTMLog > 1.0)
+    {
+        LastTMLog = Now;
+        const UCharacterMovementComponent* CMC = GetCharacterMovement();
+        UE_LOG(LogTemp, Warning, TEXT("[TM] Loc=%s  Vel=%s  Mode=%s  GravDir=%s  Controller=%s  State=%s"),
+            *GetActorLocation().ToString(), *GetVelocity().ToString(),
+            *CMC->GetMovementName(), *CMC->GetGravityDirection().ToString(),
+            *GetNameSafe(GetController()), *CurrentStateName);
+    }
+#endif
 }
 
 void ATMCharacter::UpdateRingGravity(float DeltaTime)
@@ -106,9 +177,7 @@ void ATMCharacter::UpdateRingGravity(float DeltaTime)
     // Every state function calls GetActorForwardVector()/GetActorRightVector()
     // already — this is the one change that makes all of them correct on the
     // ring without touching their bodies.
-    const FVector Right = FVector::CrossProduct(CachedFacingForward, CachedRingUp).GetSafeNormal();
-    const FMatrix Basis(CachedFacingForward, Right, CachedRingUp, FVector::ZeroVector);
-    SetActorRotation(Basis.ToQuat());
+    SetActorRotation(FRotationMatrix::MakeFromXZ(CachedFacingForward, CachedRingUp).ToQuat());
 
     // Pitch is camera-only, never touches the actor.
     if (!FMath::IsNearlyZero(PendingPitchInput))
@@ -178,6 +247,8 @@ void ATMCharacter::OnLook(const FInputActionValue& Value)
 
 void ATMCharacter::OnJumpPressed()
 {
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Jump pressed  State=%s  JumpsRemaining=%d  Grounded=%d"),
+        *CurrentStateName, JumpsRemaining, GetCharacterMovement()->IsMovingOnGround() ? 1 : 0);
     if (JumpsRemaining <= 0) return;
 
     --JumpsRemaining;
@@ -410,7 +481,6 @@ bool ATMCharacter::IsLocationDestructible(FVector Location) const
 
 bool ATMCharacter::CanWallRunAtLocation(FVector Location) const
 {
-    if (!IsLocationDestructible(Location)) return false;
     return true;
 }
 
@@ -649,13 +719,16 @@ void ATMCharacter::ApplyDamageBuff(float Multiplier, float Duration)
 }
 void ATMCharacter::OnSprintStarted()
 {
-    TransitionTo<TMState_Sprint>();
+    bSprintHeld = true;
+    if (GetCharacterMovement()->IsMovingOnGround())
+    {
+        TransitionTo<TMState_Sprint>();
+    }
 }
 
 void ATMCharacter::OnSprintEnded()
 {
-    // Only drop back to walk if we're actually sprinting
-    // (button release during a jump etc. should be ignored)
+    bSprintHeld = false;
     if (CurrentStateName == "Sprint")
     {
         TransitionTo<TMState_Walk>();

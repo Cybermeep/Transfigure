@@ -41,7 +41,7 @@ public:
         float ChunkGenerationTimeBudget = 0.005f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Destruction|Pool")
-        int32 ChunkPoolSize = 100;
+        int32 ChunkPoolSize = 0; // 0 until destruction is rebuilt (FIX_PLAN Phase 0)
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Destruction|Physics")
         float ChunkLifetime = 5.0f;

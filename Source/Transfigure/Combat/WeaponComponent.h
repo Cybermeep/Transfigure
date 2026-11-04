@@ -18,10 +18,10 @@ struct FWeaponHitInfo
     GENERATED_BODY()
 
     UPROPERTY()
-    FVector HitLocation;
+    FVector HitLocation = FVector::ZeroVector;
 
     UPROPERTY()
-    AActor* HitActor;
+    AActor* HitActor = nullptr;
 
     UPROPERTY()
     bool bWasHeadshot = false;

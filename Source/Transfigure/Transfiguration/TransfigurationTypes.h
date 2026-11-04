@@ -122,10 +122,10 @@ struct FSigilComboRecipe
     GENERATED_BODY()
 
         UPROPERTY(EditAnywhere, BlueprintReadWrite)
-        ETransfigurationElement ElementA;
+        ETransfigurationElement ElementA = ETransfigurationElement::None;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite)
-        ETransfigurationElement ElementB;
+        ETransfigurationElement ElementB = ETransfigurationElement::None;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite)
         FName ResultSpellID;
@@ -155,7 +155,7 @@ struct FActiveComboChain
         GENERATED_BODY()
 
     TArray<ETransfigurationElement> CurrentChain;
-    float LastElementTime;
+    float LastElementTime = 0.f;
     FName ExpectedResultID;
 };
 
@@ -183,10 +183,10 @@ struct FEnemySpawnPoint
     GENERATED_BODY()
 
         UPROPERTY(EditAnywhere, BlueprintReadWrite)
-        FVector Location;
+        FVector Location = FVector::ZeroVector;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite)
-        FRotator Rotation;
+        FRotator Rotation = FRotator::ZeroRotator;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite)
         bool bIsPatrolPoint = false;
@@ -198,13 +198,13 @@ struct FGrappleLineData
     GENERATED_BODY()
 
         UPROPERTY()
-        FVector StartPoint;
+        FVector StartPoint = FVector::ZeroVector;
 
     UPROPERTY()
-        FVector EndPoint;
+        FVector EndPoint = FVector::ZeroVector;
 
     UPROPERTY()
-        ETransfigurationElement Element;
+        ETransfigurationElement Element = ETransfigurationElement::None;
 
     UPROPERTY()
         float Lifetime = 3.0f;
@@ -222,10 +222,10 @@ struct FCombatGrappleData
     GENERATED_BODY()
 
         UPROPERTY()
-        ECombatGrappleMove MoveType;
+        ECombatGrappleMove MoveType = ECombatGrappleMove::Kick;
 
     UPROPERTY()
-        AActor* TargetEnemy;
+        AActor* TargetEnemy = nullptr;
 
     UPROPERTY()
         float DamageMultiplier = 1.0f;
@@ -289,16 +289,16 @@ struct FChunkGenerationTask
     GENERATED_BODY()
 
         UPROPERTY()
-        class UProceduralMeshComponent* SourceMesh;
+        class UProceduralMeshComponent* SourceMesh = nullptr;
 
     UPROPERTY()
-        int32 SectionIndex;
+        int32 SectionIndex = 0;
 
     UPROPERTY()
-        FVector HitLocation;
+        FVector HitLocation = FVector::ZeroVector;
 
     UPROPERTY()
-        float ChunkSize;
+        float ChunkSize = 0.f;
 
     UPROPERTY()
         TArray<FVector> GeneratedVertices;

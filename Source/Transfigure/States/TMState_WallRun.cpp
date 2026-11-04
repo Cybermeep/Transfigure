@@ -45,6 +45,7 @@ bool TMState_WallRun::DetectWall(ATMCharacter* Char, FVector& OutNormal, bool& O
 
 bool TMState_WallRun::CanEnter(ATMCharacter* Char)
 {
+    if (Char->IsGrappling()) return false;
     auto* CMC = Char->GetCharacterMovement();
     if (CMC->IsMovingOnGround()) return false;
     // Was GetVelocity().Size2D() -- see RingFrameUtils.h
@@ -87,7 +88,7 @@ void TMState_WallRun::Tick(float DeltaTime)
     // If no wall is detected this frame, fall into air state
     if (!DetectWall(Owner, NewNormal, bLeft))
     {
-        Owner->TransitionTo<TMState_Jump>();
+        Owner->TransitionTo<TMState_Fall>();
         return;
     }
 
@@ -103,13 +104,21 @@ void TMState_WallRun::Tick(float DeltaTime)
     // Project movement along the wall surface.
     // Was FVector::UpVector/DownVector -- on a ring, "up" depends on where
     // on the ring you're standing, so this has to come from ring gravity.
+    // Run along the wall in the direction the player is already moving
+    // (was a cross product that could point backward).
+    auto* CMC = Owner->GetCharacterMovement();
     const FVector Up = Owner->GetRingUp();
-    FVector WallForward = FVector::CrossProduct(
-        WallNormal,
-        bWallOnLeft ? -Up : Up);
-    WallForward.Normalize();
 
-    Owner->GetCharacterMovement()->Velocity = WallForward * Owner->WallRunSpeed;
+    FVector WallForward = URingFrameUtils::StripVertical(
+        FVector::VectorPlaneProject(CMC->Velocity, WallNormal), Up).GetSafeNormal();
+
+    if (WallForward.IsNearlyZero())
+    {
+        WallForward = URingFrameUtils::StripVertical(
+            FVector::VectorPlaneProject(Owner->GetActorForwardVector(), WallNormal), Up).GetSafeNormal();
+    }
+
+    CMC->Velocity = WallForward * Owner->WallRunSpeed;
 }
 
 void TMState_WallRun::Exit()

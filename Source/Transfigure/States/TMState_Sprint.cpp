@@ -5,7 +5,9 @@
 #include "States/TMState_Walk.h"
 #include "States/TMState_Slide.h"
 #include "States/TMState_Jump.h"
+#include "States/TMState_Idle.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "RingFrameUtils.h"
 
 void TMState_Sprint::Enter()
 {
@@ -16,16 +18,20 @@ void TMState_Sprint::Enter()
 void TMState_Sprint::Tick(float DeltaTime)
 {
     auto* CMC = Owner->GetCharacterMovement();
+
+    if (!CMC->IsMovingOnGround())
+    {
+        Owner->TransitionTo<TMState_Fall>();
+        return;
+    }
     if (!Owner->bSprintHeld)
     {
         Owner->TransitionTo<TMState_Walk>();
         return;
     }
-    if (Owner->bSlidePressed)
+    if (URingFrameUtils::GetPlanarSpeed(Owner) < 10.f)
     {
-        Owner->bSlidePressed = false;
-        Owner->TransitionTo<TMState_Slide>();
-        return;
+        Owner->TransitionTo<TMState_Idle>();
     }
 }
 

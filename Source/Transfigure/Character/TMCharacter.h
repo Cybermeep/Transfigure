@@ -317,6 +317,7 @@ protected:
     virtual void BeginPlay() override;
     virtual void Tick(float DeltaTime) override;
     virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
+    virtual void NotifyControllerChanged() override;
 
     /**
      * Called every Tick before the state machine runs. Computes local up

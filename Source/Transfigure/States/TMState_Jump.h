@@ -11,4 +11,15 @@ public:
     virtual void Enter() override;
     virtual void Tick(float DeltaTime) override;
     virtual void Exit() override;
+
+protected:
+    // Stops a queued launch from being read as "still grounded".
+    float StateTime = 0.f;
+};
+
+class TMState_Fall : public TMState_Jump
+{
+public:
+    using TMState_Jump::TMState_Jump;
+    virtual void Enter() override;
 };

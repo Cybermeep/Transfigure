@@ -779,9 +779,9 @@ void AEnemyPod::OnEnemySpawned(ABaseEnemy* NewEnemy)
 }
 
 // Debug visualization
+#if WITH_EDITOR
 void AEnemyPod::DrawDebugInfo()
 {
-#if WITH_EDITOR
     if (GetWorld() && GetWorld()->WorldType == EWorldType::PIE)
     {
         // Draw activation radius
@@ -802,5 +802,5 @@ void AEnemyPod::DrawDebugInfo()
             FString::Printf(TEXT("Pod %d - %d/%d"), PodID, CurrentEnemyCount, MaxEnemyCount),
             nullptr, FColor::White, 0.1f);
     }
-#endif
 }
+#endif

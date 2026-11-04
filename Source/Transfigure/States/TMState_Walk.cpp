@@ -34,7 +34,7 @@ void TMState_Walk::Tick(float DeltaTime)
     if (!CMC->IsMovingOnGround())
     {
         Owner->JumpsRemaining = 2;
-        Owner->TransitionTo<TMState_Jump>();
+        Owner->TransitionTo<TMState_Fall>();
     }
 }
 

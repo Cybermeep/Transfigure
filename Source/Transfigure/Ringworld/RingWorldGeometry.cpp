@@ -31,6 +31,7 @@ double URingWorldGeometry::GetSpinPeriod(const FRingWorldSpec& Spec)
 
 double URingWorldGeometry::GetGravityAtAltitude(const FRingWorldSpec& Spec, double Altitude)
 {
+    if (Spec.bFlatWorldForTesting) return Spec.TargetGravity;
     const double Omega = GetAngularVelocity(Spec);
     const double LocalRadius = FMath::Max(Spec.Radius - Altitude, 0.0);
     return Omega * Omega * LocalRadius;
@@ -74,6 +75,8 @@ double URingWorldGeometry::ArcToLongitudeDegrees(const FRingWorldSpec& Spec, dou
 
 FVector URingWorldGeometry::RingToWorld(const FRingWorldSpec& Spec, const FRingCoords& Coords)
 {
+    if (Spec.bFlatWorldForTesting) return FVector(Coords.Arc, Coords.Lateral, Coords.Altitude);
+
     if (Spec.Radius <= 0.0)
     {
         return FVector::ZeroVector;
@@ -90,6 +93,9 @@ FVector URingWorldGeometry::RingToWorld(const FRingWorldSpec& Spec, const FRingC
 
 FRingCoords URingWorldGeometry::WorldToRing(const FRingWorldSpec& Spec, const FVector& WorldPos)
 {
+    if (Spec.bFlatWorldForTesting) return FRingCoords(WorldPos.X, WorldPos.Y, WorldPos.Z);
+
+
     const double LocalRadius = FMath::Sqrt(WorldPos.X * WorldPos.X + WorldPos.Z * WorldPos.Z);
 
     // atan2(X, -Z) puts theta = 0 at world (0, *, -R), matching RingToWorld.
@@ -104,6 +110,8 @@ FRingCoords URingWorldGeometry::WorldToRing(const FRingWorldSpec& Spec, const FV
 
 FVector URingWorldGeometry::GetGravityDirection(const FRingWorldSpec& Spec, const FVector& WorldPos)
 {
+
+    if (Spec.bFlatWorldForTesting) return FVector(0.0, 0.0, -1.0);
     // "Down" is radially outward from the spin axis, which lies along +Y.
     FVector Radial(WorldPos.X, 0.0, WorldPos.Z);
 
@@ -117,6 +125,8 @@ FVector URingWorldGeometry::GetGravityDirection(const FRingWorldSpec& Spec, cons
 
 FTransform URingWorldGeometry::GetSurfaceFrame(const FRingWorldSpec& Spec, const FRingCoords& Coords)
 {
+    if (Spec.bFlatWorldForTesting) return FTransform(RingToWorld(Spec, Coords));
+
     if (Spec.Radius <= 0.0)
     {
         return FTransform::Identity;

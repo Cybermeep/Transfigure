@@ -20,8 +20,7 @@ public class Transfigure : ModuleRules
             Path.Combine(ModuleDirectory, "Enemy"),
             Path.Combine(ModuleDirectory, "Destruction"),
             Path.Combine(ModuleDirectory, "Temporal"),
-            Path.Combine(ModuleDirectory, "RingWorld"),
-            Path.Combine(ModuleDirectory, "City"),
+            Path.Combine(ModuleDirectory, "Ringworld"),
         });
 
         PublicDependencyModuleNames.AddRange(new string[] {
