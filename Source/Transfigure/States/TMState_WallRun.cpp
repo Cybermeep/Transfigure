@@ -67,6 +67,7 @@ void TMState_WallRun::Enter()
 
     // Use static DetectWall with Owner
     DetectWall(Owner, WallNormal, bWallOnLeft);
+    Owner->WallRunSide = bWallOnLeft ? -1.f : 1.f;   // camera tilt
     JumpsAtEntry = Owner->JumpsRemaining;
 
     auto* CMC = Owner->GetCharacterMovement();
@@ -96,6 +97,8 @@ void TMState_WallRun::Tick(float DeltaTime)
     }
 
     WallNormal = NewNormal;
+    bWallOnLeft = bLeft;
+    Owner->WallRunSide = bWallOnLeft ? -1.f : 1.f;
 
     // Player consumed their wall jump — transition to wall jump state
     if (Owner->JumpsRemaining < 1)
@@ -129,4 +132,5 @@ void TMState_WallRun::Tick(float DeltaTime)
 void TMState_WallRun::Exit()
 {
     Owner->GetCharacterMovement()->GravityScale = 1.f;
+    Owner->WallRunSide = 0.f;
 }

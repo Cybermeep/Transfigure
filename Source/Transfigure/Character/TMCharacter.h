@@ -16,6 +16,7 @@ class UTransfigurationComboDetector;
 class UBuffEffectComponent;
 class UGrappleComponent;
 class UWeaponComponent;
+class UCameraComponent;
 
 UCLASS()
 class TRANSFIGURE_API ATMCharacter : public ACharacter
@@ -51,6 +52,46 @@ public:
     /** Wall run speed cap. Arriving faster than this (e.g. a wall grapple) keeps the arrival speed. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|WallRun")
     float WallRunMaxSpeed = 2400.f;
+
+    // ── CAMERA FEEL ──
+    /** First person: the camera sits at eye height inside the capsule (no boom, no wall clipping). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Camera")
+    bool bFirstPerson = true;
+
+    /** Eye height above the capsule centre, in cm. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Camera")
+    float FirstPersonEyeHeight = 64.f;
+
+    /** Normal field of view, in degrees. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Camera")
+    float BaseFOV = 90.f;
+
+    /** Camera roll while wall running, tilted away from the wall. Negative tilts toward it. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Camera")
+    float WallRunCameraTilt = 15.f;
+
+    /** How fast the tilt eases in and out (higher = snappier). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Camera")
+    float CameraTiltSpeed = 6.f;
+
+    /** Speed (cm/s) where the view starts widening. Walking is 600. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Camera")
+    float SpeedFOVStartSpeed = 800.f;
+
+    /** Speed (cm/s) where the extra FOV is fully applied. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Camera")
+    float SpeedFOVFullSpeed = 2400.f;
+
+    /** Extra FOV at full speed, in degrees (the "zoom out" at speed). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Camera")
+    float SpeedFOVBoost = 12.f;
+
+    /** How fast the FOV follows speed changes. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Camera")
+    float FOVChangeSpeed = 4.f;
+
+    /** Set by the wall-run state: -1 wall on the left, +1 on the right, 0 when not wall running. */
+    float WallRunSide = 0.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement")
     float WallJumpLateralBoost = 500.f;
@@ -162,11 +203,13 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Temporal|Mana")
     float TemporalClapRefundPercent = 0.75f;
 
+    /** Field of view while the temporal clap is active (the camera widens instead of tilting). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Temporal|Camera")
-    float TemporalCameraTiltAngle = 15.0f;
+    float TemporalCameraFOV = 105.0f;
 
+    /** How fast the view widens when the clap starts (higher = punchier). It eases back at FOVChangeSpeed. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Temporal|Camera")
-    float TemporalCameraFOV = 100.0f;
+    float TemporalFOVChangeSpeed = 10.0f;
 
     UPROPERTY(BlueprintReadOnly, Category = "TM|Temporal")
     bool bIsTemporalActive = false;
@@ -522,6 +565,16 @@ private:
 
     /** Camera yaw offset (degrees) left over from a facing snap; decays to 0. */
     float CameraYawOffset = 0.0f;
+
+    /** Current camera roll (wall-run / temporal tilt) and FOV, eased every tick. */
+    float CameraRoll = 0.0f;
+    float CurrentFOV = 90.0f;
+
+    UPROPERTY()
+    TObjectPtr<UCameraComponent> ViewCamera;
+
+    void SetupFirstPersonCamera();
+    void UpdateCameraEffects(float DeltaTime);
 
     float BaseWalkSpeed = 600.f;
     FTimerHandle DamageBuffTimerHandle;

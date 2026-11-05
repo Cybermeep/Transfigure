@@ -14,6 +14,7 @@
 #include "EnhancedInputSubsystems.h"
 #include "InputMappingContext.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "Camera/CameraComponent.h"
 #include "Transfiguration/TransfigurationCastingComponent.h"
 #include "Transfiguration/TransfigurationComboDetector.h"
 #include "Transfiguration/BuffEffectComponent.h"
@@ -80,6 +81,7 @@ void ATMCharacter::BeginPlay()
     {
         UE_LOG(LogTemp, Error, TEXT("[TM] No CameraPitchTarget and no SpringArm on %s - camera pitch will not work"), *GetName());
     }
+    SetupFirstPersonCamera();
     if (!GetMesh() || !GetMesh()->GetSkeletalMeshAsset())
     {
         UE_LOG(LogTemp, Warning, TEXT("[TM] %s has no skeletal mesh assigned - the player will be invisible"), *GetName());
@@ -126,6 +128,7 @@ void ATMCharacter::NotifyControllerChanged()
 void ATMCharacter::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
+    UpdateCameraEffects(DeltaTime);
     UpdateRingGravity(DeltaTime);
     StateMachine.Tick(DeltaTime);
 #if !UE_BUILD_SHIPPING
@@ -204,7 +207,65 @@ void ATMCharacter::UpdateRingGravity(float DeltaTime)
     {
         // Ease out any yaw offset left by a facing snap.
         CameraYawOffset = FMath::FInterpTo(CameraYawOffset, 0.0f, DeltaTime, CameraRecenterSpeed);
-        CameraPitchTarget->SetRelativeRotation(FRotator(CameraPitch, CameraYawOffset, 0.0f));
+        CameraPitchTarget->SetRelativeRotation(FRotator(CameraPitch, CameraYawOffset, CameraRoll));
+    }
+}
+
+void ATMCharacter::SetupFirstPersonCamera()
+{
+    ViewCamera = FindComponentByClass<UCameraComponent>();
+    if (ViewCamera)
+    {
+        ViewCamera->bUsePawnControlRotation = false;
+        CurrentFOV = BaseFOV;
+        ViewCamera->SetFieldOfView(BaseFOV);
+    }
+    if (!bFirstPerson) return;
+
+    // Collapse the third-person boom onto the eyes. The spring arm stays as the pitch pivot.
+    if (USpringArmComponent* Arm = Cast<USpringArmComponent>(CameraPitchTarget))
+    {
+        Arm->TargetArmLength = 0.f;
+        Arm->SocketOffset = FVector::ZeroVector;
+        Arm->TargetOffset = FVector::ZeroVector;
+        Arm->bDoCollisionTest = false;
+        Arm->bEnableCameraLag = false;
+        Arm->bEnableCameraRotationLag = false;
+    }
+    if (CameraPitchTarget)
+    {
+        CameraPitchTarget->SetRelativeLocation(FVector(0.f, 0.f, FirstPersonEyeHeight));
+    }
+    if (ViewCamera && ViewCamera != CameraPitchTarget)
+    {
+        ViewCamera->SetRelativeLocation(FVector::ZeroVector);   // the Blueprint had it 400 cm back
+        ViewCamera->SetRelativeRotation(FRotator::ZeroRotator);
+    }
+    if (GetMesh())
+    {
+        GetMesh()->SetOwnerNoSee(true);   // never see the inside of our own body
+    }
+    UE_LOG(LogTemp, Warning, TEXT("[TM] First-person camera: %s on %s, eye height %.0f, FOV %.0f"),
+        *GetNameSafe(ViewCamera), *GetNameSafe(ViewCamera ? ViewCamera->GetAttachParent() : nullptr),
+        FirstPersonEyeHeight, BaseFOV);
+}
+
+void ATMCharacter::UpdateCameraEffects(float DeltaTime)
+{
+    // Roll: lean away from the wall while wall running.
+    const float TargetRoll = -WallRunSide * WallRunCameraTilt;
+    CameraRoll = FMath::FInterpTo(CameraRoll, TargetRoll, DeltaTime, CameraTiltSpeed);
+
+    // FOV: widen with ground speed so going fast feels fast.
+    const float Speed = URingFrameUtils::StripVertical(GetVelocity(), CachedRingUp).Size();
+    const float SpeedAlpha = FMath::Clamp((Speed - SpeedFOVStartSpeed) / FMath::Max(SpeedFOVFullSpeed - SpeedFOVStartSpeed, 1.f), 0.f, 1.f);
+    const float TargetFOV = (bIsTemporalActive ? TemporalCameraFOV : BaseFOV) + SpeedFOVBoost * SpeedAlpha;
+    // The clap snaps the view wide; leaving it (and speed changes) ease more gently.
+    const float FOVSpeed = (bIsTemporalActive && TargetFOV > CurrentFOV) ? TemporalFOVChangeSpeed : FOVChangeSpeed;
+    CurrentFOV = FMath::FInterpTo(CurrentFOV, TargetFOV, DeltaTime, FOVSpeed);
+    if (ViewCamera)
+    {
+        ViewCamera->SetFieldOfView(CurrentFOV);
     }
 }
 
@@ -737,15 +798,7 @@ void ATMCharacter::StartTemporalEffects()
     UGameplayStatics::SetGlobalTimeDilation(GetWorld(), TemporalTimeDilation);
     CustomTimeDilation = 1.f / FMath::Max(TemporalTimeDilation, 0.01f);
 
-    APlayerController* PC = Cast<APlayerController>(GetController());
-    if (PC && PC->PlayerCameraManager)
-    {
-        FRotator NewRotation = PC->GetControlRotation();
-        NewRotation.Roll = TemporalCameraTiltAngle;
-        PC->SetControlRotation(NewRotation);
-
-        PC->PlayerCameraManager->SetFOV(TemporalCameraFOV);
-    }
+    // Camera tilt and FOV for the clap are applied in UpdateCameraEffects.
 }
 
 void ATMCharacter::ExecuteClapSigilActivation()
@@ -776,15 +829,7 @@ void ATMCharacter::EndTemporalClap()
 
 void ATMCharacter::EndTemporalEffects()
 {
-    APlayerController* PC = Cast<APlayerController>(GetController());
-    if (PC && PC->PlayerCameraManager)
-    {
-        FRotator NewRotation = PC->GetControlRotation();
-        NewRotation.Roll = 0.0f;
-        PC->SetControlRotation(NewRotation);
-
-        PC->PlayerCameraManager->SetFOV(OriginalCameraFOV);
-    }
+    // UpdateCameraEffects eases the tilt and FOV back once bIsTemporalActive is false.
 }
 
 void ATMCharacter::BeginTemporalCooldown()
