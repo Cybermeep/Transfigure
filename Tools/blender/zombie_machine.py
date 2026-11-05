@@ -19,6 +19,7 @@ def _oriented(axis):
 class _Builder:
     def __init__(self):
         self.verts, self.faces, self.bones, self.glow = [], [], [], []
+        self.face_bone = []
 
     def cylinder(self, centre, axis, radius, length, bone, sides=8, bevel=0.12, glow=False, radius2=None):
         tmp = bmesh.new()
@@ -35,6 +36,7 @@ class _Builder:
             self.glow.append(1.0 if glow else 0.0)
         for f in tmp.faces:
             self.faces.append(tuple(base + v.index for v in f.verts))
+            self.face_bone.append(bone)
         tmp.free()
 
 
@@ -83,7 +85,8 @@ def _sleeve(b, a_name, b_name, sm, src_dom, bone_pos, U, rng):
                sides=8, bevel=0.0, glow=True)
 
 
-def build(T, body, src, sm, src_weights, src_dom, BONE_REGION, bone_pos, has_bone, eye_pts, FORWARD, UP, U, rng, stage):
+def build(T, body, src, sm, src_weights, src_dom, BONE_REGION, bone_pos, has_bone, eye_pts, FORWARD, UP, U, rng, stage,
+          region_of=None):
     b = _Builder()
     regions = []
 
@@ -152,7 +155,16 @@ def build(T, body, src, sm, src_weights, src_dom, BONE_REGION, bone_pos, has_bon
     for i, v in enumerate(me.vertices):
         rust = noise.noise(v.co / U * 14.0 + Vector((3, 7, 1)), noise_basis='PERLIN_ORIGINAL') * 0.5 + 0.5
         col.data[i].color = (0.0, max(0.0, min(1.0, (rust - 0.55) * 3.0)), 0.0, b.glow[i])
-    me.materials.append(bpy.data.materials.get("Metal") or bpy.data.materials.new("Metal"))
+    # One metal slot PER REGION ("UpperArmR_Metal"), so severing a region hides only its own metal.
+    slot_names = []
+    for bone in b.face_bone:
+        n = "%s_Metal" % (region_of(bone) if region_of else "Torso")
+        if n not in slot_names:
+            slot_names.append(n)
+    for n in slot_names:
+        me.materials.append(bpy.data.materials.get(n) or bpy.data.materials.new(n))
+    for i, poly in enumerate(me.polygons):
+        poly.material_index = slot_names.index("%s_Metal" % (region_of(b.face_bone[i]) if region_of else "Torso"))
 
     with bpy.context.temp_override(active_object=body, object=body, selected_objects=[body, ob],
                                    selected_editable_objects=[body, ob]):

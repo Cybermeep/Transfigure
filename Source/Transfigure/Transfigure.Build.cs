@@ -37,6 +37,7 @@ public class Transfigure : ModuleRules
             "GameplayTasks",
             "NavigationSystem",
             "DeveloperSettings",
+            "AssetRegistry",
             "GeometryCore",
             "GeometryFramework",
         });

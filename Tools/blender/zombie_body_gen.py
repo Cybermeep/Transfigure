@@ -594,7 +594,32 @@ for poly in me.polygons:
 stage("machine parts")
 import zombie_machine
 machine_regions = zombie_machine.build(T, body, src, sm, src_weights, src_dom, BONE_REGION, bone_pos, has_bone,
-                                       eye_pts, FORWARD, UP, U, rng, stage)
+                                       eye_pts, FORWARD, UP, U, rng, stage, region_of=region_of)
+
+# Measured limb thickness per part (cm), for Unreal's hit-zone capsules. Same bone pairs
+# as AProceduralZombie's part specs; 85th percentile distance of that region's surface.
+from mathutils.geometry import intersect_point_line
+PART_SEGMENTS = {
+    "Torso": ("pelvis", "neck_01"), "Head": ("head", None),
+    "UpperArmL": ("upperarm_l", "lowerarm_l"), "LowerArmL": ("lowerarm_l", "hand_l"),
+    "UpperArmR": ("upperarm_r", "lowerarm_r"), "LowerArmR": ("lowerarm_r", "hand_r"),
+    "ThighL": ("thigh_l", "calf_l"), "CalfL": ("calf_l", "foot_l"),
+    "ThighR": ("thigh_r", "calf_r"), "CalfR": ("calf_r", "foot_r"),
+}
+part_radius = {}
+for part, (b0, b1) in PART_SEGMENTS.items():
+    a = bone_pos(b0)
+    c2 = bone_pos(b1) if b1 else a + (a - bone_pos("neck_02")).normalized() * 0.20 * U
+    dists = []
+    for vi, v in enumerate(body.data.vertices[:len(vertex_region)]):
+        if vertex_region[vi] == part:
+            p_, t_ = intersect_point_line(v.co, a, c2)
+            if -0.1 <= t_ <= 1.1:
+                dists.append((v.co - p_).length)
+    if dists:
+        dists.sort()
+        part_radius[part] = round(dists[int(len(dists) * 0.85)], 2)
+stage("  limb radii (cm): " + ", ".join("%s %.1f" % kv for kv in part_radius.items()))
 
 # ----------------------------------------------------------------------------- 8) rig, save, export
 stage("save + export")
@@ -615,7 +640,7 @@ bpy.ops.export_scene.fbx(filepath=fbx_path, use_selection=True, object_types={'A
                          mesh_smooth_type='FACE', colors_type='LINEAR', primary_bone_axis='Y', secondary_bone_axis='X')
 me = body.data
 manifest = dict(name=name, archetype=args.archetype, seed=args.seed, templates=T,
-                machine_regions=machine_regions, verts=len(me.vertices),
+                machine_regions=machine_regions, part_radius=part_radius, verts=len(me.vertices),
                 tris=sum(len(p.vertices) - 2 for p in me.polygons),
                 materials=[m.name for m in me.materials])
 with open(os.path.join(args.out, name + ".json"), "w") as f:

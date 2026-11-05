@@ -3,6 +3,9 @@
 #include "Limb/ProceduralZombie.h"
 #include "Limb/LimbMeshGenerator.h"
 #include "Limb/SeveredLimb.h"
+#include "Limb/SeveredBodyPart.h"
+#include "Limb/ZombieBodyVariant.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "Transfigure.h"
 #include "ProceduralMeshComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -188,6 +191,7 @@ void AProceduralZombie::EnsureBodyAssets()
 void AProceduralZombie::BeginPlay()
 {
     EnsureBodyAssets();
+    ProceduralSkeleton = GetMesh()->GetSkeletalMeshAsset();
     Super::BeginPlay();
 
     OriginalAttackDamage = AttackDamage;
@@ -276,6 +280,7 @@ void AProceduralZombie::RebuildBody()
     PartState.Reset();
     Decor.Reset();
     PartState.SetNum(Parts.Num());
+    Skel->ShowAllMaterialSections(0);   // un-hide anything a previous life severed
 
     FRandomStream Rng(BodySeed != 0 ? BodySeed : FMath::Rand());
     const FZombieArchetype& Arch = PickArchetype(Rng);
@@ -302,6 +307,26 @@ void AProceduralZombie::RebuildBody()
         GrowthMaterial->SetVectorParameterValue(TEXT("SubsurfaceColor"), Growth);
     }
     if (MetalMaterial) MetalMaterial->SetVectorParameterValue(TEXT("Color"), MetalColor);
+    if (SkinMaterial) SkinMaterial->SetVectorParameterValue(TEXT("GlowColor"), Growth);
+    if (MetalMaterial) MetalMaterial->SetVectorParameterValue(TEXT("GlowColor"), Growth);
+
+    // Pre-generated skinned body for this form? Use it (and stop here).
+    bBakedBody = false;
+    if (bUseBakedBodies)
+    {
+        if (UZombieBodyVariant* Variant = PickVariant(Arch.Name, Rng))
+        {
+            ApplyBakedBody(Variant, Rng);
+            return;
+        }
+    }
+    // Procedural fallback: plain Mannequin skeleton, hidden, with generated parts riding on it.
+    if (ProceduralSkeleton && Skel->GetSkeletalMeshAsset() != ProceduralSkeleton)
+    {
+        Skel->SetSkeletalMesh(ProceduralSkeleton);
+    }
+    Skel->SetHiddenInGame(true);
+    CurrentVariant = nullptr;
 
     const float Fatness = Rng.FRandRange(Mutations.BodyFatness.X, Mutations.BodyFatness.Y);
 
@@ -399,7 +424,8 @@ void AProceduralZombie::RebuildBody()
         *GetName(), *CurrentArchetype.ToString(), Decor.Num(), Machine.IsEmpty() ? TEXT("none") : *Machine);
 }
 
-void AProceduralZombie::BuildPart(int32 Index, const FLimbPartSpec& Spec, FRandomStream& Rng, float Fatness, bool bMechanical)
+void AProceduralZombie::BuildPart(int32 Index, const FLimbPartSpec& Spec, FRandomStream& Rng, float Fatness, bool bMechanical,
+    bool bBaked, float BakedRadius)
 {
     FLimbPartRuntime& State = PartState[Index];
     State.Spec = Spec;
@@ -474,11 +500,26 @@ void AProceduralZombie::BuildPart(int32 Index, const FLimbPartSpec& Spec, FRando
         State.Shape.EndRadius = FMath::Max(State.Shape.EndRadius * 0.85f, State.Shape.StartRadius * 0.6f);
     }
 
-    FLimbMeshGenerator::BuildTube(State.Shape, State.Mesh);
+    if (bBaked)
+    {
+        // The visible body is the baked skinned mesh: only keep a clean capsule shape
+        // (measured radius) for the hit zone and the wound caps.
+        const float R = BakedRadius > 0.f ? BakedRadius : State.Shape.StartRadius;
+        State.Shape.StartRadius = State.Shape.EndRadius = R;
+        State.Shape.Bulge = State.Shape.Lumpiness = 0.f;
+        State.Shape.Width = State.Shape.Depth = 1.f;
+        State.Shape.bMechanical = false;
+    }
+    else
+    {
+        FLimbMeshGenerator::BuildTube(State.Shape, State.Mesh);
+    }
     State.Health = Spec.MaxHealth * (bMechanical ? MechanicalHealthMultiplier : 1.f);
     State.bAttached = true;
 
-    // Visible part, riding on the hidden bone.
+    // Visible part, riding on the hidden bone (procedural body only).
+    if (!bBaked)
+    {
     UProceduralMeshComponent* PM = NewObject<UProceduralMeshComponent>(this);
     PM->SetupAttachment(Skel, Spec.StartBone);
     PM->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -488,6 +529,8 @@ void AProceduralZombie::BuildPart(int32 Index, const FLimbPartSpec& Spec, FRando
         State.Mesh.UVs, State.Mesh.Colors, State.Mesh.Tangents, false);
     PM->SetMaterial(0, GetMaterial(bMechanical ? ELimbMaterial::Metal : ELimbMaterial::Skin));
     State.MeshComp = PM;
+
+    }
 
     // Hit zone from the same numbers: capsule along the part's axis.
     const FVector Axis = State.Shape.End - State.Shape.Start;
@@ -591,7 +634,7 @@ void AProceduralZombie::AddGrowths(const FZombieArchetype& Arch, FRandomStream& 
 
 void AProceduralZombie::AddDecor(int32 OwnerPart, const FLimbShape& InShape, ELimbMaterial Material, FName Bone)
 {
-    if (!PartState.IsValidIndex(OwnerPart) || !PartState[OwnerPart].MeshComp) return;
+    if (!PartState.IsValidIndex(OwnerPart) || !PartState[OwnerPart].bAttached) return;
 
     FLimbShape Shape = InShape;
     Shape.Style = Material == ELimbMaterial::Growth ? FLimbShape::EStyle::Growth
@@ -902,7 +945,7 @@ void AProceduralZombie::TakePoolDamage(float DamageAmount, FVector HitLocation)
 void AProceduralZombie::SeverPart(int32 Index, const FVector& HitLocation)
 {
     FLimbPartRuntime& Root = PartState[Index];
-    if (!Root.bAttached || !Root.MeshComp) return;
+    if (!Root.bAttached || (!Root.MeshComp && !bBakedBody)) return;
 
     // This part plus everything hanging off it (upper arm takes the forearm).
     TArray<int32> Take = { Index };
@@ -915,6 +958,13 @@ void AProceduralZombie::SeverPart(int32 Index, const FVector& HitLocation)
                 Take.Add(i);
             }
         }
+    }
+
+    if (bBakedBody)
+    {
+        SeverBakedPart(Index, HitLocation, Take);
+        UpdateCripple();
+        return;
     }
 
     // Severed actor sits exactly where the root part is; everything else is re-expressed in its space.
@@ -1051,6 +1101,141 @@ void AProceduralZombie::StopRagdoll()
     Skel->SetCollisionProfileName(TEXT("CharacterMesh"));
     Skel->AttachToComponent(GetCapsuleComponent(), FAttachmentTransformRules::SnapToTargetNotIncludingScale);
     Skel->SetRelativeLocationAndRotation(MeshRelativeLocation, MeshRelativeRotation);
+}
+
+FName AProceduralZombie::PartName(ELimbPart Part)
+{
+    FString S = UEnum::GetValueAsString(Part);
+    S.RemoveFromStart(TEXT("ELimbPart::"));
+    return FName(*S);
+}
+
+UZombieBodyVariant* AProceduralZombie::PickVariant(FName Archetype, FRandomStream& Rng) const
+{
+    // Search by the asset's searchable Archetype tag, without loading every variant.
+    IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+    TArray<FAssetData> All;
+    Registry.GetAssetsByClass(UZombieBodyVariant::StaticClass()->GetClassPathName(), All);
+
+    TArray<FAssetData> Match;
+    for (const FAssetData& A : All)
+    {
+        FName Tag;
+        if (A.GetTagValue(TEXT("Archetype"), Tag) && Tag == Archetype) Match.Add(A);
+    }
+    if (Match.Num() == 0) return nullptr;
+    return Cast<UZombieBodyVariant>(Match[Rng.RandRange(0, Match.Num() - 1)].GetAsset());
+}
+
+void AProceduralZombie::ApplyBakedBody(UZombieBodyVariant* Variant, FRandomStream& Rng)
+{
+    USkeletalMesh* BodyMesh = Variant->Mesh.LoadSynchronous();
+    if (!BodyMesh)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[TM] %s: variant %s has no mesh"), *GetName(), *Variant->GetName());
+        return;
+    }
+    CurrentVariant = Variant;
+    bBakedBody = true;
+
+    USkeletalMeshComponent* Skel = GetMesh();
+    Skel->SetSkeletalMesh(BodyMesh);
+    Skel->SetHiddenInGame(false);
+    Skel->ShowAllMaterialSections(0);
+
+    // Region slots get flesh, "<Region>_Metal" slots get metal.
+    const TArray<FSkeletalMaterial>& Slots = BodyMesh->GetMaterials();
+    for (int32 i = 0; i < Slots.Num(); ++i)
+    {
+        const bool bMetal = Slots[i].MaterialSlotName.ToString().EndsWith(TEXT("_Metal"));
+        Skel->SetMaterial(i, GetMaterial(bMetal ? ELimbMaterial::Metal : ELimbMaterial::Skin));
+    }
+
+    // Hit zones from the measured limb thickness.
+    for (int32 i = 0; i < Parts.Num(); ++i)
+    {
+        const float* R = Variant->PartRadius.Find(PartName(Parts[i].Part));
+        BuildPart(i, Parts[i], Rng, 1.f, /*bMechanical=*/false, /*bBaked=*/true, R ? *R : 0.f);
+
+        // A region with a "<Region>_Metal" slot is machinery: tougher, sparks instead of bone.
+        const FName MetalSlot(*(PartName(Parts[i].Part).ToString() + TEXT("_Metal")));
+        PartState[i].bMechanical = Slots.ContainsByPredicate([&](const FSkeletalMaterial& M) { return M.MaterialSlotName == MetalSlot; });
+        if (PartState[i].bMechanical) PartState[i].Health *= MechanicalHealthMultiplier;
+    }
+    UpdateCripple();
+
+    UE_LOG(LogTemp, Warning, TEXT("[TM] %s using baked body %s (%s)"), *GetName(), *Variant->GetName(), *CurrentArchetype.ToString());
+}
+
+void AProceduralZombie::SeverBakedPart(int32 Index, const FVector& HitLocation, const TArray<int32>& Take)
+{
+    USkeletalMeshComponent* Skel = GetMesh();
+    USkeletalMesh* BodyMesh = Skel->GetSkeletalMeshAsset();
+    FLimbPartRuntime& Root = PartState[Index];
+    const FName CutBone = Root.Spec.StartBone;
+
+    // Which material slots belong to the severed parts (flesh + their metal).
+    TSet<FName> SlotNames;
+    for (int32 i : Take)
+    {
+        const FName N = PartName(Parts[i].Part);
+        SlotNames.Add(N);
+        SlotNames.Add(FName(*(N.ToString() + TEXT("_Metal"))));
+    }
+    TArray<int32> Visible;
+    TArray<UMaterialInterface*> SlotMats;
+    const TArray<FSkeletalMaterial>& Slots = BodyMesh->GetMaterials();
+    for (int32 i = 0; i < Slots.Num(); ++i)
+    {
+        SlotMats.Add(Skel->GetMaterial(i));
+        if (SlotNames.Contains(Slots[i].MaterialSlotName))
+        {
+            Visible.Add(i);
+            Skel->ShowMaterialSection(i, i, false, 0);   // gone from the zombie
+        }
+    }
+
+    for (int32 i : Take)
+    {
+        FLimbPartRuntime& S = PartState[i];
+        S.bAttached = false;
+        S.Health = 0.f;
+        if (S.HitZone) S.HitZone->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    }
+
+    // The cut piece: same mesh, only these sections, joint broken, ring gravity.
+    const FTransform BoneWorld = Skel->GetSocketTransform(CutBone, RTS_World);
+    const FVector Away = (BoneWorld.GetLocation() - HitLocation).GetSafeNormal();
+    const FVector Up = URingFrameUtils::GetUpFor(this);
+    FActorSpawnParameters Params;
+    Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+    if (ASeveredBodyPart* Gib = GetWorld()->SpawnActor<ASeveredBodyPart>(ASeveredBodyPart::StaticClass(), BoneWorld, Params))
+    {
+        Gib->Init(BodyMesh, SlotMats, Visible, CutBone, BoneWorld,
+            (Away + Up * 0.5f).GetSafeNormal() * SeverLaunchSpeed + GetVelocity());
+
+        FLimbShape CapShape, BoneShape;
+        MakeWound(Root, /*bOnBody=*/false, CapShape, BoneShape);
+        CapShape.Style = Root.bMechanical ? FLimbShape::EStyle::Metal : FLimbShape::EStyle::Growth;
+        FLimbMesh W;
+        FLimbMeshGenerator::BuildTube(CapShape, W);
+        Gib->AddWound(W, GetMaterial(Root.bMechanical ? ELimbMaterial::Metal : ELimbMaterial::Growth));
+        FLimbMeshGenerator::BuildTube(BoneShape, W);
+        Gib->AddWound(W, GetMaterial(Root.bMechanical ? ELimbMaterial::Metal : ELimbMaterial::Bone));
+    }
+
+    // Stump on the body.
+    const int32 ParentIdx = PartIndex(Root.Spec.ParentPart);
+    if (PartState.IsValidIndex(ParentIdx) && PartState[ParentIdx].bAttached)
+    {
+        FLimbShape CapShape, BoneShape;
+        MakeWound(Root, /*bOnBody=*/true, CapShape, BoneShape);
+        AddDecor(ParentIdx, CapShape, Root.bMechanical ? ELimbMaterial::Metal : ELimbMaterial::Growth, CutBone);
+        AddDecor(ParentIdx, BoneShape, Root.bMechanical ? ELimbMaterial::Metal : ELimbMaterial::Bone, CutBone);
+    }
+
+    UE_LOG(LogTemp, Warning, TEXT("[TM] %s: SEVERED %s%s from baked body (%d part(s), %d section(s))"), *GetName(),
+        Root.bMechanical ? TEXT("machine ") : TEXT(""), *PartName(Root.Spec.Part).ToString(), Take.Num(), Visible.Num());
 }
 
 void AProceduralZombie::OnSpawnFromPool()

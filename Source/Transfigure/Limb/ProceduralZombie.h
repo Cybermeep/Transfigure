@@ -23,6 +23,7 @@ class UProceduralMeshComponent;
 class UCapsuleComponent;
 class UMaterialInterface;
 class UMaterialInstanceDynamic;
+class UZombieBodyVariant;
 
 /** Which material a generated mesh uses. */
 enum class ELimbMaterial : uint8 { Skin, Growth, Metal, Bone };
@@ -99,6 +100,16 @@ public:
     UPROPERTY(EditAnywhere, Category = "Zombie|Body")
     TArray<FLimbPartSpec> Parts;
 
+    /**
+     * Use pre-generated skinned bodies (UZombieBodyVariant assets made by the Blender pipeline)
+     * when one exists for the chosen form. Falls back to the procedural tube body otherwise.
+     */
+    UPROPERTY(EditAnywhere, Category = "Zombie|Body")
+    bool bUseBakedBodies = true;
+
+    UFUNCTION(BlueprintPure, Category = "Zombie")
+    bool IsUsingBakedBody() const { return bBakedBody; }
+
     /** Body forms to pick from (by Weight). Defaults: Husk, Bloat, Gaunt. */
     UPROPERTY(EditAnywhere, Category = "Zombie|Body")
     TArray<FZombieArchetype> Archetypes;
@@ -149,7 +160,12 @@ private:
     void EnsureBodyAssets();
     const FZombieArchetype& PickArchetype(FRandomStream& Rng) const;
     void ApplyArchetypeBody(const FZombieArchetype& Arch);
-    void BuildPart(int32 Index, const FLimbPartSpec& Spec, FRandomStream& Rng, float Fatness, bool bMechanical);
+    void BuildPart(int32 Index, const FLimbPartSpec& Spec, FRandomStream& Rng, float Fatness, bool bMechanical,
+        bool bBaked = false, float BakedRadius = 0.f);
+    UZombieBodyVariant* PickVariant(FName Archetype, FRandomStream& Rng) const;
+    void ApplyBakedBody(UZombieBodyVariant* Variant, FRandomStream& Rng);
+    void SeverBakedPart(int32 Index, const FVector& HitLocation, const TArray<int32>& Take);
+    static FName PartName(ELimbPart Part);
     void AddGrowths(const FZombieArchetype& Arch, FRandomStream& Rng);
     void AddDecor(int32 OwnerPart, const FLimbShape& Shape, ELimbMaterial Material, FName Bone = NAME_None);
     void AddHandsFeetFace(const FZombieArchetype& Arch, FRandomStream& Rng);
@@ -192,6 +208,13 @@ private:
     TObjectPtr<UMaterialInterface> BaseMaterial;
 
     FName CurrentArchetype;
+    bool bBakedBody = false;
+
+    UPROPERTY()
+    TObjectPtr<UZombieBodyVariant> CurrentVariant;
+
+    UPROPERTY()
+    TObjectPtr<USkeletalMesh> ProceduralSkeleton;   // the plain Mannequin, for the procedural fallback
     bool bRagdoll = false;
     float OriginalWalkSpeed = 0.f;
     float OriginalAttackDamage = 0.f;
