@@ -56,6 +56,14 @@ public:
     UPROPERTY(EditAnywhere, Category = "Ring World")
     bool bActivateRingWorld = true;
 
+    /** Generate procedural content on the open ring around the player (outside ARingAuthoredZones). */
+    UPROPERTY(EditAnywhere, Category = "Ring World")
+    bool bGenerateContent = true;
+
+    /** Same seed = same ring. */
+    UPROPERTY(EditAnywhere, Category = "Ring World")
+    int32 WorldSeed = 1337;
+
     /** Rebuild automatically whenever a property above changes in the Details panel. */
     UPROPERTY(EditAnywhere, Category = "Ring World")
     bool bRegenerateOnPropertyChange = true;

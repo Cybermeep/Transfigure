@@ -4,6 +4,7 @@
 #include "RingWorldGeometry.h"
 #include "RingWorldSettings.h"
 #include "RingNearField.h"
+#include "RingContentStreamer.h"
 #include "Engine/World.h"
 
 #include "Components/DynamicMeshComponent.h"
@@ -50,6 +51,16 @@ void ARingBandGenerator::BeginPlay()
     if (bChangedFlatFlag)
     {
         GetWorld()->SpawnActor<ARingNearField>(ARingNearField::StaticClass(), FTransform::Identity);
+        if (bGenerateContent)
+        {
+            FActorSpawnParameters Params;
+            Params.bDeferConstruction = true;
+            if (ARingContentStreamer* Streamer = GetWorld()->SpawnActor<ARingContentStreamer>(ARingContentStreamer::StaticClass(), FTransform::Identity, Params))
+            {
+                Streamer->WorldSeed = WorldSeed;
+                Streamer->FinishSpawning(FTransform::Identity);
+            }
+        }
     }
 }
 

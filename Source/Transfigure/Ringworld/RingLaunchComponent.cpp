@@ -3,6 +3,9 @@
 #include "RingLaunchComponent.h"
 #include "RingLaunchPad.h"
 #include "RingWorldSettings.h"
+#include "RingContentStreamer.h"
+#include "EngineUtils.h"
+#include "Engine/World.h"
 #include "Character/TMCharacter.h"
 #include "Grapple/GrappleComponent.h"
 #include "States/TMState_Jump.h"
@@ -25,6 +28,8 @@ void URingLaunchComponent::SetActivePad(ARingLaunchPad* Pad)
     if (ActivePad.Get() == Pad) return;
     ActivePad = Pad;
     bTargetValid = false;
+    TargetPad = nullptr;
+    if (Pad) RefreshKnownPads();
     UE_LOG(LogTemp, Warning, TEXT("[TM] Launch pad %s"), Pad ? TEXT("entered: look up at the ring and click where to land") : TEXT("left"));
 }
 
@@ -41,9 +46,19 @@ void URingLaunchComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
     }
 }
 
+void URingLaunchComponent::RefreshKnownPads()
+{
+    KnownPads.Reset();
+    for (TActorIterator<ARingLaunchPad> It(GetWorld()); It; ++It)
+    {
+        KnownPads.Add(*It);
+    }
+}
+
 void URingLaunchComponent::UpdateTarget()
 {
     bTargetValid = false;
+    TargetPad = nullptr;
     ATMCharacter* Char = GetCharacter();
     APlayerController* PC = Char ? Cast<APlayerController>(Char->GetController()) : nullptr;
     if (!PC) return;
@@ -51,15 +66,60 @@ void URingLaunchComponent::UpdateTarget()
     FVector CamLoc;
     FRotator CamRot;
     PC->GetPlayerViewPoint(CamLoc, CamRot);
+    // Aiming close to another pad snaps onto it: that's how you get back.
+    const FVector ViewDir = CamRot.Vector();
+    const double SnapCos = FMath::Cos(FMath::DegreesToRadians(PadSnapDegrees));
+    double BestCos = SnapCos;
+    for (const TWeakObjectPtr<ARingLaunchPad>& PadPtr : KnownPads)
+    {
+        ARingLaunchPad* Pad = PadPtr.Get();
+        if (!Pad || Pad == ActivePad.Get()) continue;
+        const FVector ToPad = Pad->GetActorLocation() - CamLoc;
+        const double Cos = FVector::DotProduct(ToPad.GetSafeNormal(), ViewDir);
+        if (Cos > BestCos && ToPad.Size() >= ActivePad->MinLaunchDistance)
+        {
+            BestCos = Cos;
+            TargetPad = Pad;
+        }
+    }
+    if (ARingLaunchPad* Pad = TargetPad.Get())
+    {
+        Target = Pad->GetActorLocation();
+        TargetCoords = URingWorldGeometry::WorldToRing(URingWorldSettings::GetSpec(), Target);
+        TargetDistance = FVector::Dist(Char->GetActorLocation(), Target);
+        bTargetValid = true;
+        return;
+    }
+
     FVector Hit;
     FRingCoords Coords;
-    if (!URingWorldGeometry::RaycastRingSurface(URingWorldSettings::GetSpec(), CamLoc, CamRot.Vector(), Hit, Coords)) return;
+    if (!URingWorldGeometry::RaycastRingSurface(URingWorldSettings::GetSpec(), CamLoc, ViewDir, Hit, Coords)) return;
 
     TargetDistance = FVector::Dist(Char->GetActorLocation(), Hit);
     if (TargetDistance < ActivePad->MinLaunchDistance) return;
     Target = Hit;
     TargetCoords = Coords;
     bTargetValid = true;
+}
+
+void URingLaunchComponent::SpawnReturnPad()
+{
+    const FVector Up = -URingWorldGeometry::GetGravityDirection(URingWorldSettings::GetSpec(), Target);
+    FVector Fwd = FVector::VectorPlaneProject(FVector::YAxisVector, Up).GetSafeNormal();
+    if (Fwd.IsNearlyZero()) Fwd = FVector::CrossProduct(Up, FVector::XAxisVector).GetSafeNormal();
+    FActorSpawnParameters Params;
+    Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+    ARingLaunchPad* Pad = GetWorld()->SpawnActor<ARingLaunchPad>(ARingLaunchPad::StaticClass(),
+        Target + Up * 10.f, FRotationMatrix::MakeFromXZ(Fwd, Up).Rotator(), Params);
+    if (!Pad) return;
+    Pad->PadName = FString::Printf(TEXT("Landing %d"), ++LandingCount);
+    ReturnPads.Add(Pad);
+    while (ReturnPads.Num() > MaxReturnPads)
+    {
+        if (ARingLaunchPad* Old = ReturnPads[0].Get()) Old->Destroy();
+        ReturnPads.RemoveAt(0);
+    }
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Return pad '%s' placed at the landing spot"), *Pad->PadName);
 }
 
 bool URingLaunchComponent::TryLaunch()
@@ -100,8 +160,15 @@ bool URingLaunchComponent::TryLaunch()
     Char->SetSurfaceUpDirect(StartUp, true);
     Char->AddFOVKick(LaunchFOVKick);
 
-    UE_LOG(LogTemp, Warning, TEXT("[TM] LAUNCH: %.0f km to arc %.0f km / lateral %.1f km, %.1fs flight"),
-        Dist / 1e5, TargetCoords.Arc / 1e5, TargetCoords.Lateral / 1e5, FlightTime);
+    // Build the destination in the background while we fly, keeping the landing spot clear.
+    if (ARingContentStreamer* Streamer = ARingContentStreamer::Get(GetWorld()))
+    {
+        Streamer->AddClearPoint(Target);
+        Streamer->SetFocusOverride(true, Target);
+    }
+
+    UE_LOG(LogTemp, Warning, TEXT("[TM] LAUNCH: %.0f km to %s (arc %.0f km / lateral %.1f km), %.1fs flight"),
+        Dist / 1e5, TargetPad.IsValid() ? *TargetPad->PadName : TEXT("open ring"), TargetCoords.Arc / 1e5, TargetCoords.Lateral / 1e5, FlightTime);
     return true;
 }
 
@@ -138,6 +205,14 @@ void URingLaunchComponent::UpdateFlight(float DeltaTime)
         CMC->Velocity = -EndUp * LandingSpeed;
         Char->AddFOVKick(8.f);
         ActivePad = nullptr;
+        if (ARingContentStreamer* Streamer = ARingContentStreamer::Get(GetWorld()))
+        {
+            Streamer->SetFocusOverride(false);
+        }
+        if (!TargetPad.IsValid())
+        {
+            SpawnReturnPad();
+        }
         UE_LOG(LogTemp, Warning, TEXT("[TM] LANDED at arc %.0f km / lateral %.1f km"), TargetCoords.Arc / 1e5, TargetCoords.Lateral / 1e5);
     }
 }

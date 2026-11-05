@@ -26,6 +26,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ring World")
     double MinLaunchDistance = 300000.0;
 
+    /** Shown on the HUD when you aim at this pad from another one. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ring World")
+    FString PadName = TEXT("Launch pad");
+
     UPROPERTY(VisibleAnywhere, Category = "Ring World")
     TObjectPtr<UStaticMeshComponent> Pad;
 

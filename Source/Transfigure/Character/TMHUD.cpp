@@ -7,6 +7,8 @@
 #include "Engine/Font.h"
 #include "Misc/App.h"
 #include "Ringworld/RingLaunchComponent.h"
+#include "Ringworld/RingLaunchPad.h"
+#include "Ringworld/RingContentStreamer.h"
 
 void ATMHUD::DrawHUD()
 {
@@ -38,11 +40,31 @@ void ATMHUD::DrawHUD()
         const FLinearColor Ice(0.55f, 0.9f, 1.f, 1.f);
         if (Launch->IsFlying())
         {
-            DrawCenteredText(FString::Printf(TEXT("IN FLIGHT  -  landing in %.1fs"), Launch->GetFlightTimeLeft()),
+            const ARingContentStreamer* Streamer = ARingContentStreamer::Get(GetWorld());
+            const int32 Pending = Streamer ? Streamer->GetPendingCount() : 0;
+            DrawCenteredText(FString::Printf(TEXT("IN FLIGHT  -  landing in %.1fs%s"), Launch->GetFlightTimeLeft(),
+                Pending > 0 ? *FString::Printf(TEXT("  -  building destination (%d left)"), Pending) : TEXT("  -  destination ready")),
                 FVector2D(Center.X, Center.Y + 80.f), Ice, 1.2f);
         }
         else if (Launch->GetActivePad())
         {
+            // Other pads: dim markers with names, so you can find your way back.
+            FVector CamLoc0;
+            FRotator CamRot0;
+            GetOwningPlayerController()->GetPlayerViewPoint(CamLoc0, CamRot0);
+            for (const TWeakObjectPtr<ARingLaunchPad>& PadPtr : Launch->GetKnownPads())
+            {
+                const ARingLaunchPad* Pad = PadPtr.Get();
+                if (!Pad || Pad == Launch->GetActivePad()) continue;
+                if (FVector::DotProduct(Pad->GetActorLocation() - CamLoc0, CamRot0.Vector()) <= 0.f) continue;
+                const FVector P = Project(Pad->GetActorLocation());
+                const FLinearColor Dim(1.f, 0.85f, 0.4f, 0.8f);
+                DrawRect(Dim, P.X - 5.f, P.Y - 5.f, 10.f, 10.f);
+                DrawCenteredText(FString::Printf(TEXT("%s  %s km"), *Pad->PadName,
+                    *FText::AsNumber(FMath::RoundToInt(FVector::Dist(Pad->GetActorLocation(), CamLoc0) / 1e5)).ToString()),
+                    FVector2D(P.X, P.Y - 18.f), Dim, 0.9f);
+            }
+
             if (Launch->HasTarget())
             {
                 const FVector Screen = Project(Launch->GetTarget());
@@ -56,7 +78,8 @@ void ATMHUD::DrawHUD()
                     DrawRect(Ice, Screen.X - 1.5f, Screen.Y - S, 3.f, S * 2.f);
                     DrawRect(FLinearColor(Ice.R, Ice.G, Ice.B, 0.35f), Screen.X - S, Screen.Y - S, S * 2.f, S * 2.f);
                 }
-                DrawCenteredText(FString::Printf(TEXT("LAUNCH  -  %s km  -  click to fly there"),
+                DrawCenteredText(FString::Printf(TEXT("LAUNCH  -  %s%s km  -  click to fly there"),
+                    Launch->GetTargetPad() ? *FString::Printf(TEXT("%s  -  "), *Launch->GetTargetPad()->PadName) : TEXT(""),
                     *FText::AsNumber(FMath::RoundToInt(Launch->GetTargetDistance() / 1e5)).ToString()),
                     FVector2D(Center.X, Center.Y + 60.f), Ice, 1.2f);
             }

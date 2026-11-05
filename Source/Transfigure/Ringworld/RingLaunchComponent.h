@@ -53,12 +53,24 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ring World|Launch")
     float LaunchFOVKick = 15.f;
 
+    /** Aiming within this many degrees of another pad snaps the landing spot onto it (how you get home). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ring World|Launch")
+    float PadSnapDegrees = 3.f;
+
+    /** Return pads left at landing spots; the oldest goes once there are more than this. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ring World|Launch")
+    int32 MaxReturnPads = 8;
+
     void SetActivePad(ARingLaunchPad* Pad);
     ARingLaunchPad* GetActivePad() const { return ActivePad.Get(); }
 
     /** On a pad and the view ray meets the ring far enough away. */
     bool HasTarget() const { return ActivePad.IsValid() && bTargetValid && !bFlying; }
     FVector GetTarget() const { return Target; }
+    /** The landing spot is another pad (snapped to it). */
+    ARingLaunchPad* GetTargetPad() const { return TargetPad.Get(); }
+    /** Every pad in the world (for HUD markers). */
+    const TArray<TWeakObjectPtr<ARingLaunchPad>>& GetKnownPads() const { return KnownPads; }
     const FRingCoords& GetTargetCoords() const { return TargetCoords; }
     double GetTargetDistance() const { return TargetDistance; }
 
@@ -77,6 +89,12 @@ private:
     ATMCharacter* GetCharacter() const;
 
     TWeakObjectPtr<ARingLaunchPad> ActivePad;
+    TWeakObjectPtr<ARingLaunchPad> TargetPad;
+    TArray<TWeakObjectPtr<ARingLaunchPad>> KnownPads;
+    TArray<TWeakObjectPtr<ARingLaunchPad>> ReturnPads;
+    int32 LandingCount = 0;
+    void RefreshKnownPads();
+    void SpawnReturnPad();
     bool bTargetValid = false;
     FVector Target = FVector::ZeroVector;
     FRingCoords TargetCoords;

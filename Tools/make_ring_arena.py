@@ -90,7 +90,14 @@ pad_local = unreal.Transform(location=unreal.Vector(800.0, 0.0, 10.0), rotation=
 pad_world = pad_local.multiply(frame)
 pad = subsys.spawn_actor_from_class(unreal.RingLaunchPad, pad_world.translation, pad_world.rotation.rotator())
 pad.set_actor_label("LaunchPad")
-log("added LaunchPad in front of the player start")
+pad.set_editor_property("pad_name", "Arena")
+log("added LaunchPad 'Arena' in front of the player start")
+
+# The arena is hand-built: no procedural content within 3 km of it.
+zone = subsys.spawn_actor_from_class(unreal.RingAuthoredZone, frame.translation, frame.rotation.rotator())
+zone.set_actor_label("ArenaAuthoredZone")
+zone.set_editor_property("radius", 300000.0)
+log("added authored zone (3 km) over the arena")
 
 # KillZ / world bounds are world-Z checks: meaningless on a ring 1,600 km from the origin.
 ws = world.get_world_settings()
