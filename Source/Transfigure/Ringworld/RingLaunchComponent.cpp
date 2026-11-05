@@ -27,6 +27,7 @@ void URingLaunchComponent::SetActivePad(ARingLaunchPad* Pad)
 {
     if (ActivePad.Get() == Pad) return;
     ActivePad = Pad;
+    if (bFlying) return;   // leaving the pad as we take off must not forget which pad we're flying to
     bTargetValid = false;
     TargetPad = nullptr;
     if (Pad) RefreshKnownPads();

@@ -70,7 +70,9 @@ ARingPiece::ARingPiece()
     PrimaryActorTick.bCanEverTick = false;
     Mesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Mesh"));
     SetRootComponent(Mesh);
-    Mesh->SetMobility(EComponentMobility::Static);
+    // Movable: the mesh is chosen after spawning, and a Static component refuses that
+    // (it silently stayed empty - invisible, no collision). Pieces never actually move.
+    Mesh->SetMobility(EComponentMobility::Movable);
     Mesh->SetCollisionProfileName(TEXT("BlockAll"));
     Mesh->SetCanEverAffectNavigation(false);
 }

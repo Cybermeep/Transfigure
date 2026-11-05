@@ -30,6 +30,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ring World")
     FString PadName = TEXT("Launch pad");
 
+    /** Plain root, so spawning the pad (which sets the root's transform) can't squash the disc's scale. */
+    UPROPERTY(VisibleAnywhere, Category = "Ring World")
+    TObjectPtr<USceneComponent> Root;
+
     UPROPERTY(VisibleAnywhere, Category = "Ring World")
     TObjectPtr<UStaticMeshComponent> Pad;
 

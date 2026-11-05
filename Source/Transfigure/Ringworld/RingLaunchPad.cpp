@@ -11,8 +11,10 @@ ARingLaunchPad::ARingLaunchPad()
 {
     PrimaryActorTick.bCanEverTick = false;
 
+    Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
+    SetRootComponent(Root);
     Pad = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Pad"));
-    SetRootComponent(Pad);
+    Pad->SetupAttachment(Root);
     static ConstructorHelpers::FObjectFinder<UStaticMesh> Cylinder(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
     if (Cylinder.Succeeded())
     {
@@ -23,8 +25,7 @@ ARingLaunchPad::ARingLaunchPad()
     Pad->SetCollisionProfileName(TEXT("BlockAll"));
 
     Zone = CreateDefaultSubobject<USphereComponent>(TEXT("Zone"));
-    Zone->SetupAttachment(Pad);
-    Zone->SetAbsolute(false, false, true);   // keep the sphere round despite the flat pad scale
+    Zone->SetupAttachment(Root);
     Zone->InitSphereRadius(350.f);
     Zone->SetCollisionProfileName(TEXT("OverlapAllDynamic"));
     Zone->SetGenerateOverlapEvents(true);
