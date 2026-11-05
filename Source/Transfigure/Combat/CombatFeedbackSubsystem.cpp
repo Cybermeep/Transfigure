@@ -28,6 +28,9 @@ void UCombatFeedbackSubsystem::ReportDamage(const FVector& Location, float Amoun
     P.Time = Now();
     P.bKill = bKill;
     P.Drift = FMath::FRandRange(-30.f, 30.f);
+    P.bCrit = bNextCrit;
+    if (bNextCrit) LastCritTime = P.Time;
+    bNextCrit = false;
     Popups.Add(P);
     if (Popups.Num() > 64) Popups.RemoveAt(0);
 

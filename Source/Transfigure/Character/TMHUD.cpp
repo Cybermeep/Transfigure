@@ -94,6 +94,9 @@ void ATMHUD::DrawCenteredText(const FString& Text, const FVector2D& Pos, const F
     UFont* Font = GEngine ? GEngine->GetMediumFont() : nullptr;
     float W = 0.f, H = 0.f;
     GetTextSize(Text, W, H, Font, Scale);
+    // Dark drop shadow so pale colours (ice, lightning) read against bright walls and sky.
+    const float Off = FMath::Max(1.f, 1.5f * Scale);
+    DrawText(Text, FLinearColor(0.f, 0.f, 0.f, Color.A * 0.7f), Pos.X - W * 0.5f + Off, Pos.Y - H * 0.5f + Off, Font, Scale);
     DrawText(Text, Color, Pos.X - W * 0.5f, Pos.Y - H * 0.5f, Font, Scale);
 }
 
@@ -193,12 +196,14 @@ void ATMHUD::DrawCrosshair(const FVector2D& Center)
     const double Now = Feedback->Now();
     const float SinceKill = static_cast<float>(Now - Feedback->GetLastKillTime());
     const float SinceHit = static_cast<float>(Now - Feedback->GetLastHitTime());
+    const float SinceCrit = static_cast<float>(Now - Feedback->GetLastCritTime());
     const bool bKill = SinceKill < 0.35f;
-    if (!bKill && SinceHit > 0.15f) return;
-    // Hit marker: four short diagonals (red and bigger for a kill).
-    const float A = bKill ? 1.f - SinceKill / 0.35f : 1.f - SinceHit / 0.15f;
-    const FLinearColor C = bKill ? FLinearColor(1.f, 0.2f, 0.15f, A) : FLinearColor(1.f, 1.f, 1.f, A);
-    const float In = bKill ? 9.f : 7.f, Out = bKill ? 20.f : 14.f;
+    const bool bCrit = SinceCrit < 0.2f;
+    if (!bKill && !bCrit && SinceHit > 0.15f) return;
+    // Hit marker: four short diagonals (gold for a headshot, red and bigger for a kill).
+    const float A = bKill ? 1.f - SinceKill / 0.35f : bCrit ? 1.f - SinceCrit / 0.2f : 1.f - SinceHit / 0.15f;
+    const FLinearColor C = bKill ? FLinearColor(1.f, 0.2f, 0.15f, A) : bCrit ? FLinearColor(1.f, 0.8f, 0.2f, A) : FLinearColor(1.f, 1.f, 1.f, A);
+    const float In = bKill ? 9.f : bCrit ? 8.f : 7.f, Out = bKill ? 20.f : bCrit ? 17.f : 14.f;
     for (int32 i = 0; i < 4; ++i)
     {
         const float SX = (i & 1) ? 1.f : -1.f, SY = (i & 2) ? 1.f : -1.f;
@@ -220,8 +225,10 @@ void ATMHUD::DrawDamagePopups()
         if (FVector::DotProduct(P.Location - CamLoc, CamRot.Vector()) <= 0.f) continue;
         const float T = static_cast<float>((Now - P.Time) / UCombatFeedbackSubsystem::PopupLife);
         const FVector S = Project(P.Location);
-        const float Scale = (P.bKill ? 1.5f : 1.f) * FMath::GetMappedRangeValueClamped(FVector2D(5.f, 120.f), FVector2D(0.9f, 1.6f), P.Amount);
-        const FLinearColor C(P.Color.R, P.Color.G, P.Color.B, 1.f - T * T);
+        const float Scale = (P.bKill ? 1.5f : 1.f) * (P.bCrit ? 1.3f : 1.f)
+            * FMath::GetMappedRangeValueClamped(FVector2D(5.f, 120.f), FVector2D(0.9f, 1.6f), P.Amount);
+        const FLinearColor Base = P.bCrit ? FLinearColor(1.f, 0.82f, 0.25f) : P.Color;
+        const FLinearColor C(Base.R, Base.G, Base.B, 1.f - T * T);
         DrawCenteredText(FString::Printf(TEXT("%d"), FMath::RoundToInt(P.Amount)), FVector2D(S.X + P.Drift * T, S.Y - 50.f * T), C, Scale);
     }
 }

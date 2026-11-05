@@ -153,6 +153,8 @@ public:
     virtual void TakeStatusDamage(float Damage, ETransfigurationElement Element) override;
     /** Archetype weaknesses on top of the machine-part rules: Bloats burst under fire, Gaunts shrug off cold. */
     virtual float GetElementScale(ETransfigurationElement Element, bool bMachinePart) const override;
+    /** The shot hit the head part's hit zone. */
+    virtual bool IsHeadHit(const FHitResult& Hit) const override;
 
     /** Spell area damage is multiplied by this per limb (the body still takes it all), so one
      *  blast doesn't strip every limb. Frozen limbs (x3) and the Severing Void still shred. */

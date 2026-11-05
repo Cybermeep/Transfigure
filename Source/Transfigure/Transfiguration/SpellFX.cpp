@@ -94,6 +94,11 @@ void ASpellFX::SetIntensity(float Intensity)
     if (MID) MID->SetScalarParameterValue(TEXT("Intensity"), Intensity);
 }
 
+void ASpellFX::SetNearFade(float Amount)
+{
+    if (MID) MID->SetScalarParameterValue(TEXT("NearFade"), Amount);
+}
+
 static ASpellFX* SpawnFXActor(UWorld* World, const FVector& Location, const FRotator& Rotation)
 {
     if (!World) return nullptr;

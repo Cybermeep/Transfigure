@@ -100,6 +100,13 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Camera")
     float WallRunTiltGrace = 0.4f;
 
+    /** Gun kick: the view climbs (degrees) and settles back by itself. */
+    void AddRecoil(float PitchDegrees, float YawDegrees)
+    {
+        RecoilPitch = FMath::Min(RecoilPitch + PitchDegrees, 6.f);
+        RecoilYaw = FMath::Clamp(RecoilYaw + YawDegrees, -3.f, 3.f);
+    }
+
     /** Quick FOV punch (degrees) that fades out, e.g. on a grapple boost. */
     void AddFOVKick(float Degrees) { FOVKick += Degrees; }
     /** Camera shake (0..1 "trauma"; adds up, decays). Big spells, hits taken. */
@@ -648,6 +655,7 @@ private:
     void OnGrapplePullPressed();
     void OnWebTrapPressed();
     void OnFirePressed();
+    void OnFireReleased();
 
     // ── MANA SYSTEM ──
     FTimerHandle ManaRegenDelayHandle;
@@ -694,6 +702,8 @@ private:
     bool bSurfaceUpOverride = false;
     bool bOverspeedBraking = false;
     float FOVKick = 0.f;
+    float RecoilPitch = 0.f;
+    float RecoilYaw = 0.f;
     float FOVTension = 0.f;
     float CameraShakeTrauma = 0.f;
     float CameraShakeTime = 0.f;

@@ -63,6 +63,9 @@ public:
     /** How much of an element's damage this enemy (or one of its machine parts) takes. 1 = normal. */
     virtual float GetElementScale(ETransfigurationElement Element, bool bMachinePart) const;
 
+    /** Did this shot hit the head? (Default: a bone named "head".) */
+    virtual bool IsHeadHit(const FHitResult& Hit) const;
+
     /** Status effects (burning, chilled/frozen, shocked, marked, staggered, voided). */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Enemy|Status")
     TObjectPtr<UStatusEffectComponent> Status;

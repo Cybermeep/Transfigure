@@ -43,6 +43,8 @@ public:
     /** Keep showing (for zones that manage their own lifetime). */
     void SetPersistent(bool bInPersistent) { bPersistent = bInPersistent; }
     void SetIntensity(float Intensity);
+    /** 1 = fade out right in front of the camera (default), 0 = full brightness up close (thin tracers). */
+    void SetNearFade(float Amount);
 
 protected:
     virtual void Tick(float DeltaSeconds) override;

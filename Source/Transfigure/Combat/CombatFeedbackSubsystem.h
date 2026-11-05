@@ -21,6 +21,8 @@ struct FDamagePopup
     FLinearColor Color = FLinearColor::White;
     double Time = 0.0;
     bool bKill = false;
+    /** Headshot: drawn gold and bigger. */
+    bool bCrit = false;
     /** Random sideways drift so stacked numbers don't overlap. */
     float Drift = 0.f;
 };
@@ -52,6 +54,11 @@ public:
     /** Ask the player's camera to shake (0..1, adds up, decays). */
     void AddShake(float Trauma);
 
+    /** The next damage reported is a headshot (the gun calls this just before applying it). */
+    void MarkNextHitCrit() { bNextCrit = true; }
+    void ClearNextHitCrit() { bNextCrit = false; }
+    double GetLastCritTime() const { return LastCritTime; }
+
     double GetLastHitTime() const { return LastHitTime; }
     double GetLastKillTime() const { return LastKillTime; }
     double Now() const;
@@ -72,4 +79,6 @@ private:
 
     double LastHitTime = -100.0;
     double LastKillTime = -100.0;
+    double LastCritTime = -100.0;
+    bool bNextCrit = false;
 };

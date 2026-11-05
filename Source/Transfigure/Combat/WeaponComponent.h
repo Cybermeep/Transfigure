@@ -11,6 +11,7 @@
 #include "WeaponComponent.generated.h"
 
 class ATMCharacter;
+class UPointLightComponent;
 
 USTRUCT(BlueprintType)
 struct FWeaponHitInfo
@@ -90,6 +91,35 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon")
     FName HeadBoneName = TEXT("head");
 
+    /** Hold to fire: shots per second while the trigger is held (the first shot is instant). 0 = one per click. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon")
+    float FireRate = 9.f;
+
+    /** Camera kick per shot (degrees up); it settles back by itself. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Feel")
+    float RecoilPitchPerShot = 0.55f;
+
+    /** Random sideways kick per shot (degrees, either way). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Feel")
+    float RecoilYawPerShot = 0.18f;
+
+    /** Speed (cm/s) a shot gives to severed limbs and ragdoll corpses. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Feel")
+    float ShotImpulse = 420.f;
+
+    /** Trigger pressed / released (the character's fire input). */
+    UFUNCTION(BlueprintCallable, Category = "Weapon")
+    void StartFiring();
+
+    UFUNCTION(BlueprintCallable, Category = "Weapon")
+    void StopFiring();
+
+    UFUNCTION(BlueprintPure, Category = "Weapon")
+    bool IsFiring() const { return bTriggerHeld; }
+
+    /** Shots fired since play started (the smoke test checks it). */
+    int32 GetShotsFired() const { return ShotsFired; }
+
     /** Traces from the camera along the view direction. Returns true if something was hit. */
     UFUNCTION(BlueprintCallable, Category = "Weapon")
     bool FireWeapon();
@@ -147,4 +177,16 @@ private:
 
     UFUNCTION()
     void OnInfusionExpired();
+
+    bool bTriggerHeld = false;
+    double LastShotTime = -100.0;
+    int32 ShotsFired = 0;
+
+    UPROPERTY()
+    TObjectPtr<UPointLightComponent> MuzzleLight;
+    float MuzzleFlash = 0.f;
+
+    /** Where a gun held low on the right would be (tracers start here). */
+    FVector GetMuzzleLocation() const;
+    void PlayShotEffects(const FVector& Muzzle, const FVector& End, const FHitResult* Hit, bool bEnemy);
 };

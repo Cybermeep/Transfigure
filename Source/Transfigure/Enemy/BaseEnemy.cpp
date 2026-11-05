@@ -333,6 +333,11 @@ void ABaseEnemy::TakeStatusDamage(float Damage, ETransfigurationElement Element)
     TakeSpellDamage(Damage, GetActorLocation(), Element);
 }
 
+bool ABaseEnemy::IsHeadHit(const FHitResult& Hit) const
+{
+    return Hit.BoneName == TEXT("head");
+}
+
 float ABaseEnemy::GetElementScale(ETransfigurationElement Element, bool bMachinePart) const
 {
     if (!bMachinePart) return 1.f;

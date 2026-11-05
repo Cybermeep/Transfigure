@@ -38,6 +38,7 @@
 #include "RingWorldGeometry.h"
 #include "RingWorldSettings.h"
 #include "RingFrameUtils.h"
+#include "EngineUtils.h"
 
 ATMCharacter::ATMCharacter()
 {
@@ -231,7 +232,7 @@ void ATMCharacter::UpdateRingGravity(float DeltaTime)
     {
         // Ease out any yaw offset left by a facing snap.
         CameraYawOffset = FMath::FInterpTo(CameraYawOffset, 0.0f, DeltaTime, CameraRecenterSpeed);
-        CameraPitchTarget->SetRelativeRotation(FRotator(CameraPitch, CameraYawOffset, CameraRoll + CameraFlipRoll) + CameraShakeRot);
+        CameraPitchTarget->SetRelativeRotation(FRotator(CameraPitch + RecoilPitch, CameraYawOffset + RecoilYaw, CameraRoll + CameraFlipRoll) + CameraShakeRot);
     }
 }
 
@@ -315,6 +316,8 @@ void ATMCharacter::UpdateCameraEffects(float DeltaTime)
     const float FOVSpeed = (bIsTemporalActive && TargetFOV > CurrentFOV) ? TemporalFOVChangeSpeed : FOVChangeSpeed;
     CurrentFOV = FMath::FInterpTo(CurrentFOV, TargetFOV, DeltaTime, FOVSpeed);
     FOVKick = FMath::FInterpTo(FOVKick, 0.f, DeltaTime, 5.f);
+    RecoilPitch = FMath::FInterpTo(RecoilPitch, 0.f, DeltaTime, 6.f);
+    RecoilYaw = FMath::FInterpTo(RecoilYaw, 0.f, DeltaTime, 6.f);
 
     // Shake: smooth noise, strength = trauma squared (small hits barely move it, big ones jolt).
     CameraShakeTrauma = FMath::Max(CameraShakeTrauma - DeltaTime * 1.6f, 0.f);
@@ -503,6 +506,7 @@ void ATMCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
     if (IA_Fire)
     {
         EIC->BindAction(IA_Fire, ETriggerEvent::Started, this, &ATMCharacter::OnFirePressed);
+        EIC->BindAction(IA_Fire, ETriggerEvent::Completed, this, &ATMCharacter::OnFireReleased);
     }
 }
 
@@ -638,7 +642,12 @@ void ATMCharacter::OnFirePressed()
     }
     // On a launch pad, aiming at the ring: click launches you there instead of shooting.
     if (LaunchComponent && (LaunchComponent->IsFlying() || LaunchComponent->TryLaunch())) return;
-    if (WeaponComponent) WeaponComponent->FireWeapon();
+    if (WeaponComponent) WeaponComponent->StartFiring();
+}
+
+void ATMCharacter::OnFireReleased()
+{
+    if (WeaponComponent) WeaponComponent->StopFiring();
 }
 
 // ── MAGIC INPUT HANDLERS ──
@@ -698,6 +707,7 @@ void ATMCharacter::ToggleSpellbook()
     if (!PC) return;
     if (bSpellWheelOpen) CloseSpellWheel();
     bSpellbookOpen = !bSpellbookOpen;
+    if (bSpellbookOpen && WeaponComponent) WeaponComponent->StopFiring();
 
     if (bSpellbookOpen)
     {
@@ -887,6 +897,58 @@ void ATMCharacter::SpellSmokeTestStep()
                 FScreenshotRequest::RequestScreenshot(TEXT("Smoke_Spellbook_Combos"), true, false);
             }), 1.25f, false);
         }
+        ++SmokeStep;
+        return;
+    }
+
+    if (ComboStep == Combos.Num() + 2 && WeaponComponent)
+    {
+        // Gunplay: hold the trigger on a row of zombies for a second.
+        if (bSpellbookOpen) ToggleSpellbook();
+        for (TActorIterator<ASpellStructure> It(World); It; ++It) It->Destroy();   // the combos' ice spire is in the way
+        TWeakObjectPtr<AProceduralZombie> Target;
+        for (int32 i = 0; i < 4; ++i)
+        {
+            // The first one straight ahead (the burst aims at its head), the rest behind it.
+            const float Side = i == 0 ? 0.f : (i - 2) * 80.f;
+            const FVector P = Ground(GetActorLocation() + Fwd * (800.f + i * 120.f) + GetActorRightVector() * Side) + Up * 110.f;
+            FActorSpawnParameters SP;
+            SP.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+            if (AProceduralZombie* Z = World->SpawnActor<AProceduralZombie>(AProceduralZombie::StaticClass(), P, GetActorRotation() + FRotator(0.f, 180.f, 0.f), SP))
+            {
+                Z->SetLifeSpan(8.f);
+                if (i == 0) Target = Z;
+            }
+        }
+        FTimerHandle Aim;
+        GetWorldTimerManager().SetTimer(Aim, FTimerDelegate::CreateWeakLambda(this, [this, Target]()
+        {
+            // Look at the first zombie's head (the recoil climbs from there).
+            if (!Target.IsValid() || !ViewCamera) return;
+            FVector Head = Target->GetMesh() ? Target->GetMesh()->GetBoneLocation(TEXT("head")) : FVector::ZeroVector;
+            if (Head.IsNearlyZero()) Head = Target->GetActorLocation() + GetRingUp() * 65.f;
+            const FVector D = Head - ViewCamera->GetComponentLocation();
+            const float Rise = FVector::DotProduct(D, GetRingUp());
+            CameraPitch = FMath::RadiansToDegrees(FMath::Atan2(Rise, URingFrameUtils::StripVertical(D, GetRingUp()).Size()));
+        }), 0.2f, false);
+        const int32 ShotsBefore = WeaponComponent->GetShotsFired();
+        FTimerHandle Start, Stop, Shot;
+        GetWorldTimerManager().SetTimer(Start, FTimerDelegate::CreateWeakLambda(this, [this]()
+        {
+            if (WeaponComponent) WeaponComponent->StartFiring();
+            FScreenshotRequest::RequestScreenshot(TEXT("Smoke_Gun_Tracer"), true, false);   // the frame of the first shot
+        }), 0.3f, false);
+        GetWorldTimerManager().SetTimer(Shot, FTimerDelegate::CreateWeakLambda(this, []()
+        {
+            FScreenshotRequest::RequestScreenshot(TEXT("Smoke_Gun_Burst"), true, false);
+        }), 0.75f, false);
+        GetWorldTimerManager().SetTimer(Stop, FTimerDelegate::CreateWeakLambda(this, [this, ShotsBefore]()
+        {
+            if (!WeaponComponent) return;
+            WeaponComponent->StopFiring();
+            UE_LOG(LogTemp, Warning, TEXT("[TM] SMOKE gun: %d shots in 1.2 s held, recoil now %.2f deg"),
+                WeaponComponent->GetShotsFired() - ShotsBefore, RecoilPitch);
+        }), 1.5f, false);
         ++SmokeStep;
         return;
     }

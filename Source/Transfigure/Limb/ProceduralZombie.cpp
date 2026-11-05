@@ -1062,6 +1062,19 @@ FVector AProceduralZombie::PartLocation(int32 Index) const
     return GetActorLocation();
 }
 
+bool AProceduralZombie::IsHeadHit(const FHitResult& Hit) const
+{
+    const UPrimitiveComponent* C = Hit.GetComponent();
+    for (const FLimbPartRuntime& S : PartState)
+    {
+        if (C && S.HitZone == C) return S.Spec.Part == ELimbPart::Head;
+    }
+    // The shot hit the body capsule: same rule as the damage, the nearest part takes it.
+    const int32 Idx = FindHitPart(Hit.ImpactPoint);
+    if (Idx != INDEX_NONE) return PartState[Idx].Spec.Part == ELimbPart::Head;
+    return Super::IsHeadHit(Hit);
+}
+
 float AProceduralZombie::GetElementScale(ETransfigurationElement Element, bool bMachinePart) const
 {
     float Scale = Super::GetElementScale(Element, bMachinePart);
