@@ -63,6 +63,34 @@ def finish(mat):
     log("saved %s" % mat.get_path_name())
 
 
+def add_glow(m, vc, x, y, strength=4.0, default=(0.85, 0.15, 0.75)):
+    """Emissive from the vertex-colour glow mask (A): sacs, eyes, lesion cracks, lenses."""
+    gcol = vparam(m, "GlowColor", default, x, y)
+    gstr = sparam(m, "GlowStrength", strength, x, y + 150)
+    t = node(m, unreal.MaterialExpressionTime, x, y + 300)
+    speed = sparam(m, "PulseSpeed", 0.6, x, y + 400)
+    tf = node(m, unreal.MaterialExpressionMultiply, x + 200, y + 300)
+    link(t, "", tf, "A"); link(speed, "", tf, "B")
+    ph = node(m, unreal.MaterialExpressionAdd, x + 350, y + 300)
+    link(tf, "", ph, "A"); link(vc, "G", ph, "B")
+    wave = node(m, unreal.MaterialExpressionSine, x + 500, y + 300)
+    link(ph, "", wave, "")
+    half = node(m, unreal.MaterialExpressionMultiply, x + 650, y + 300, const_b=0.5)
+    link(wave, "", half, "A")
+    p01 = node(m, unreal.MaterialExpressionAdd, x + 800, y + 300, const_b=0.5)
+    link(half, "", p01, "A")
+    pulse = node(m, unreal.MaterialExpressionLinearInterpolate, x + 950, y + 300, const_a=0.45, const_b=1.0)
+    link(p01, "", pulse, "Alpha")
+    k1 = node(m, unreal.MaterialExpressionMultiply, x + 950, y + 150)
+    link(vc, "A", k1, "A"); link(gstr, "", k1, "B")
+    k2 = node(m, unreal.MaterialExpressionMultiply, x + 1100, y + 200)
+    link(k1, "", k2, "A"); link(pulse, "", k2, "B")
+    em = node(m, unreal.MaterialExpressionMultiply, x + 1250, y + 100)
+    link(gcol, "", em, "A"); link(k2, "", em, "B")
+    to_prop(em, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    return gcol
+
+
 # ------------------------------------------------------------------ Flesh
 def build_flesh():
     m = new_material("M_ZombieFlesh")
@@ -88,12 +116,18 @@ def build_flesh():
     link(vc, "B", dark, "Alpha")
     base = node(m, unreal.MaterialExpressionMultiply, -300, 0)
     link(veined, "", base, "A"); link(dark, "", base, "B")
-    to_prop(base, "", unreal.MaterialProperty.MP_BASE_COLOR)
 
-    # Wet in the creases, drier on the mottled patches.
-    rough = node(m, unreal.MaterialExpressionLinearInterpolate, -300, 250, const_a=0.38, const_b=0.72)
-    link(vc, "G", rough, "Alpha")
+    gcol = add_glow(m, vc, -1200, 700)
+    glow_tint = node(m, unreal.MaterialExpressionLinearInterpolate, -150, 0)
+    link(base, "", glow_tint, "A"); link(gcol, "", glow_tint, "B"); link(vc, "A", glow_tint, "Alpha")
+    to_prop(glow_tint, "", unreal.MaterialProperty.MP_BASE_COLOR)
+
+    # Dry, matte skin (was glossy enough to read as plastic); a little wetter in creases.
+    rough = node(m, unreal.MaterialExpressionLinearInterpolate, -300, 250, const_a=0.82, const_b=0.58)
+    link(vc, "B", rough, "Alpha")
     to_prop(rough, "", unreal.MaterialProperty.MP_ROUGHNESS)
+    spec = sparam(m, "Specular", 0.3, -300, 330)
+    to_prop(spec, "", unreal.MaterialProperty.MP_SPECULAR)
 
     sss = vparam(m, "SubsurfaceColor", (0.55, 0.08, 0.35), -300, 400)
     to_prop(sss, "", unreal.MaterialProperty.MP_SUBSURFACE_COLOR)
@@ -171,6 +205,7 @@ def build_metal():
     rough = node(m, unreal.MaterialExpressionLinearInterpolate, -450, 350, const_a=0.28, const_b=0.85)
     link(vc, "G", rough, "Alpha")
     to_prop(rough, "", unreal.MaterialProperty.MP_ROUGHNESS)
+    add_glow(m, vc, -1000, 600, strength=8.0)
     finish(m)
 
 
