@@ -15,6 +15,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "PhysicsEngine/PhysicsAsset.h"
+#include "PhysicsEngine/SkeletalBodySetup.h"
 #include "RingFrameUtils.h"
 #include "RingWorldGeometry.h"
 #include "RingWorldSettings.h"
@@ -1071,6 +1072,33 @@ void AProceduralZombie::Die()
         Skel->SetSimulatePhysics(true);
         Skel->SetAllBodiesPhysicsBlendWeight(1.f);
         bRagdoll = true;
+        DisableSeveredBodies();
+    }
+}
+
+void AProceduralZombie::DisableSeveredBodies()
+{
+    if (!bBakedBody) return;
+    USkeletalMeshComponent* Skel = GetMesh();
+    UPhysicsAsset* PhysAsset = Skel->GetPhysicsAsset();
+    USkeletalMesh* BodyMesh = Skel->GetSkeletalMeshAsset();
+    if (!PhysAsset || !BodyMesh || !Skel->IsPhysicsStateCreated()) return;
+    const FReferenceSkeleton& RefSkel = BodyMesh->GetRefSkeleton();
+    for (int32 i = 0; i < PartState.Num(); ++i)
+    {
+        if (PartState[i].bAttached) continue;
+        const int32 Cut = RefSkel.FindBoneIndex(Parts[i].StartBone);
+        if (Cut == INDEX_NONE) continue;
+        for (const USkeletalBodySetup* Setup : PhysAsset->SkeletalBodySetups)
+        {
+            if (!Setup) continue;
+            const int32 B = RefSkel.FindBoneIndex(Setup->BoneName);
+            if (B != Cut && !RefSkel.BoneIsChildOf(B, Cut)) continue;
+            if (FBodyInstance* Body = Skel->GetBodyInstance(Setup->BoneName))
+            {
+                Body->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+            }
+        }
     }
 }
 
@@ -1142,6 +1170,17 @@ void AProceduralZombie::ApplyBakedBody(UZombieBodyVariant* Variant, FRandomStrea
     Skel->SetSkeletalMesh(BodyMesh);
     Skel->SetHiddenInGame(false);
     Skel->ShowAllMaterialSections(0);
+    if (UPhysicsAsset* PhysAsset = Skel->GetPhysicsAsset(); PhysAsset && Skel->IsPhysicsStateCreated())
+    {
+        for (const USkeletalBodySetup* Setup : PhysAsset->SkeletalBodySetups)
+        {
+            if (!Setup) continue;
+            if (FBodyInstance* Body = Skel->GetBodyInstance(Setup->BoneName))
+            {
+                Body->SetCollisionEnabled(Skel->GetCollisionEnabled());
+            }
+        }
+    }
 
     // Region slots get flesh, "<Region>_Metal" slots get metal.
     const TArray<FSkeletalMaterial>& Slots = BodyMesh->GetMaterials();
@@ -1212,7 +1251,7 @@ void AProceduralZombie::SeverBakedPart(int32 Index, const FVector& HitLocation, 
     if (ASeveredBodyPart* Gib = GetWorld()->SpawnActor<ASeveredBodyPart>(ASeveredBodyPart::StaticClass(), BoneWorld, Params))
     {
         Gib->Init(BodyMesh, SlotMats, Visible, CutBone, BoneWorld,
-            (Away + Up * 0.5f).GetSafeNormal() * SeverLaunchSpeed + GetVelocity());
+            (Away + Up * 0.5f).GetSafeNormal() * SeverLaunchSpeed + GetVelocity(), Skel);
 
         FLimbShape CapShape, BoneShape;
         MakeWound(Root, /*bOnBody=*/false, CapShape, BoneShape);
@@ -1233,6 +1272,8 @@ void AProceduralZombie::SeverBakedPart(int32 Index, const FVector& HitLocation, 
         AddDecor(ParentIdx, CapShape, Root.bMechanical ? ELimbMaterial::Metal : ELimbMaterial::Growth, CutBone);
         AddDecor(ParentIdx, BoneShape, Root.bMechanical ? ELimbMaterial::Metal : ELimbMaterial::Bone, CutBone);
     }
+
+    DisableSeveredBodies();
 
     UE_LOG(LogTemp, Warning, TEXT("[TM] %s: SEVERED %s%s from baked body (%d part(s), %d section(s))"), *GetName(),
         Root.bMechanical ? TEXT("machine ") : TEXT(""), *PartName(Root.Spec.Part).ToString(), Take.Num(), Visible.Num());

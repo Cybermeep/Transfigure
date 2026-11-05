@@ -165,6 +165,8 @@ private:
     UZombieBodyVariant* PickVariant(FName Archetype, FRandomStream& Rng) const;
     void ApplyBakedBody(UZombieBodyVariant* Variant, FRandomStream& Rng);
     void SeverBakedPart(int32 Index, const FVector& HitLocation, const TArray<int32>& Take);
+    /** Baked body: physics bodies of severed (hidden) parts stop colliding, so corpses don't rest on invisible limbs. */
+    void DisableSeveredBodies();
     static FName PartName(ELimbPart Part);
     void AddGrowths(const FZombieArchetype& Arch, FRandomStream& Rng);
     void AddDecor(int32 OwnerPart, const FLimbShape& Shape, ELimbMaterial Material, FName Bone = NAME_None);

@@ -29,9 +29,11 @@ public:
      * @param VisibleSlots   slot indices to show (everything else is hidden)
      * @param CutBone        root bone of the severed subtree
      * @param CutBoneWorld   the zombie's current world transform of CutBone
+     * @param PoseSource     the zombie's mesh: the piece starts in its current pose (bent arm stays bent)
      */
     void Init(USkeletalMesh* InMesh, const TArray<UMaterialInterface*>& SlotMaterials, const TArray<int32>& VisibleSlots,
-        FName CutBone, const FTransform& CutBoneWorld, const FVector& LaunchVelocity);
+        FName CutBone, const FTransform& CutBoneWorld, const FVector& LaunchVelocity,
+        const USkeletalMeshComponent* PoseSource = nullptr);
 
     /** Wound cap / bone stub, in CutBone's local space. */
     void AddWound(const FLimbMesh& WoundMesh, UMaterialInterface* Material);
@@ -46,6 +48,8 @@ protected:
     TObjectPtr<USkeletalMeshComponent> Mesh;
 
     FName RootBone;
+    /** CutBone's reference-pose transform in component space (for keeping the hidden skeleton on the piece). */
+    FTransform RootRefCS;
 
     static TArray<TWeakObjectPtr<ASeveredBodyPart>> AllParts;
 };

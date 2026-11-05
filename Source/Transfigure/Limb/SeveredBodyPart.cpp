@@ -24,7 +24,8 @@ ASeveredBodyPart::ASeveredBodyPart()
 }
 
 void ASeveredBodyPart::Init(USkeletalMesh* InMesh, const TArray<UMaterialInterface*>& SlotMaterials,
-    const TArray<int32>& VisibleSlots, FName CutBone, const FTransform& CutBoneWorld, const FVector& LaunchVelocity)
+    const TArray<int32>& VisibleSlots, FName CutBone, const FTransform& CutBoneWorld, const FVector& LaunchVelocity,
+    const USkeletalMeshComponent* PoseSource)
 {
     RootBone = CutBone;
     Mesh->SetSkeletalMesh(InMesh);
@@ -42,6 +43,7 @@ void ASeveredBodyPart::Init(USkeletalMesh* InMesh, const TArray<UMaterialInterfa
     {
         RefCS = RefCS * RefSkel.GetRefBonePose()[B];
     }
+    RootRefCS = RefCS;
     FTransform Unscaled = CutBoneWorld;
     const FVector Scale = CutBoneWorld.GetScale3D();
     Unscaled.SetScale3D(FVector::OneVector);
@@ -82,6 +84,22 @@ void ASeveredBodyPart::Init(USkeletalMesh* InMesh, const TArray<UMaterialInterfa
     Mesh->BreakConstraint(FVector::ZeroVector, CutBoneWorld.GetLocation(), CutBone);
     Mesh->SetAllBodiesBelowSimulatePhysics(CutBone, true, true);
     Mesh->SetAllBodiesBelowPhysicsBlendWeight(CutBone, 1.f, false, true);
+
+    // Start in the zombie's current pose instead of snapping to the reference pose.
+    if (PoseSource)
+    {
+        for (const USkeletalBodySetup* Setup : PhysAsset->SkeletalBodySetups)
+        {
+            if (!Setup || !Subtree.Contains(RefSkel.FindBoneIndex(Setup->BoneName))) continue;
+            if (PoseSource->GetBoneIndex(Setup->BoneName) == INDEX_NONE) continue;
+            if (FBodyInstance* Body = Mesh->GetBodyInstance(Setup->BoneName))
+            {
+                FTransform Xf = PoseSource->GetSocketTransform(Setup->BoneName, RTS_World);
+                Xf.SetScale3D(FVector::OneVector);
+                Body->SetBodyTransform(Xf, ETeleportType::TeleportPhysics);
+            }
+        }
+    }
     Mesh->AddImpulseToAllBodiesBelow(LaunchVelocity, CutBone, /*bVelChange=*/true, /*bIncludeSelf=*/true);
     Mesh->AddAngularImpulseInDegrees(FMath::VRand() * 360.f, CutBone, true);
 
@@ -115,6 +133,17 @@ void ASeveredBodyPart::Tick(float DeltaTime)
     const double Altitude = URingWorldGeometry::WorldToRing(Spec, Pos).Altitude;
     const float G = static_cast<float>(URingWorldGeometry::GetGravityAtAltitude(Spec, Altitude));
     Mesh->AddForceToAllBodiesBelow(-URingFrameUtils::GetUpAt(Pos) * G, RootBone, /*bAccelChange=*/true, /*bIncludeSelf=*/true);
+
+    // Only the piece simulates; the hidden rest of the skeleton is kinematic and would stay where
+    // the cut happened. Skin near the cut is partly weighted to those parent bones, so it stretched
+    // back to that spot as the piece rolled away. Keep the whole component riding on the piece.
+    // (Moving the component only moves the kinematic bodies, not the simulated ones.)
+    FTransform BoneWorld = Mesh->GetSocketTransform(RootBone, RTS_World);
+    const FVector Scale = Mesh->GetComponentScale();
+    BoneWorld.SetScale3D(FVector::OneVector);
+    FTransform CompXf = RootRefCS.Inverse() * BoneWorld;
+    CompXf.SetScale3D(Scale);
+    Mesh->SetWorldTransform(CompXf, false, nullptr, ETeleportType::None);
 }
 
 void ASeveredBodyPart::EndPlay(const EEndPlayReason::Type EndPlayReason)
