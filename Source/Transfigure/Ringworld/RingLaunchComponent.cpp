@@ -4,6 +4,7 @@
 #include "RingLaunchPad.h"
 #include "RingWorldSettings.h"
 #include "RingContentStreamer.h"
+#include "RingRegions.h"
 #include "EngineUtils.h"
 #include "Engine/World.h"
 #include "Character/TMCharacter.h"
@@ -160,6 +161,9 @@ bool URingLaunchComponent::TryLaunch()
     Char->GetCharacterMovement()->SetMovementMode(MOVE_None);
     Char->SetSurfaceUpDirect(StartUp, true);
     Char->AddFOVKick(LaunchFOVKick);
+
+    // The landing spot is flat ground (the terrain there is built after we arrive).
+    FRingRegions::AddFlatten(TargetCoords.Arc, TargetCoords.Lateral, 3000.0, 8000.0);
 
     // Build the destination in the background while we fly, keeping the landing spot clear.
     if (ARingContentStreamer* Streamer = ARingContentStreamer::Get(GetWorld()))

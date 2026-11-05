@@ -1,6 +1,7 @@
 // Source/Transfigure/Ringworld/RingContentStreamer.cpp
 
 #include "RingContentStreamer.h"
+#include "RingRegions.h"
 #include "RingWorldGeometry.h"
 #include "RingWorldSettings.h"
 #include "RingLaunchComponent.h"
@@ -8,6 +9,10 @@
 #include "Limb/ProceduralZombie.h"
 #include "Components/SphereComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/ExponentialHeightFogComponent.h"
+#include "Components/LightComponent.h"
+#include "Engine/ExponentialHeightFog.h"
+#include "Engine/DirectionalLight.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -19,47 +24,9 @@ TWeakObjectPtr<ARingContentStreamer> ARingContentStreamer::Instance;
 
 namespace
 {
-    // Stable 64-bit mix (splitmix64). Never use GetTypeHash/std::hash for seeds: they can change.
-    uint64 Mix(uint64 X)
+    int32 CellSeed(int32 World, int64 A, int64 B, uint64 Salt)
     {
-        X += 0x9E3779B97F4A7C15ull;
-        X = (X ^ (X >> 30)) * 0xBF58476D1CE4E5B9ull;
-        X = (X ^ (X >> 27)) * 0x94D049BB133111EBull;
-        return X ^ (X >> 31);
-    }
-    int32 Seed3(int32 World, int64 A, int64 B, uint64 Salt)
-    {
-        return static_cast<int32>(Mix(Mix(Mix(static_cast<uint64>(World) ^ Salt) ^ static_cast<uint64>(A)) ^ static_cast<uint64>(B)) & 0x7FFFFFFF);
-    }
-
-    /** Look and mix of one 50 km region. */
-    struct FRegionStyle
-    {
-        float Density = 0.6f;
-        float Height = 1.f;
-        float Danger = 0.3f;
-        float WPillars = 1.f, WWalls = 1.f, WCanopy = 1.f, WMesa = 1.f;
-        FLinearColor Colors[3];
-    };
-
-    FRegionStyle MakeRegionStyle(int32 WorldSeed, int64 RegionArc, int64 RegionLat)
-    {
-        FRandomStream R(Seed3(WorldSeed, RegionArc, RegionLat, 0x5EED0001ull));
-        FRegionStyle S;
-        S.Density = R.FRandRange(0.35f, 0.95f);
-        S.Height = R.FRandRange(0.7f, 1.6f);
-        S.Danger = R.FRand();
-        S.WPillars = R.FRandRange(0.1f, 1.f);
-        S.WWalls = R.FRandRange(0.1f, 1.f);
-        S.WCanopy = R.FRandRange(0.1f, 1.f);
-        S.WMesa = R.FRandRange(0.1f, 1.f);
-        const float Hue = R.FRandRange(0.f, 360.f);
-        for (int32 i = 0; i < 3; ++i)
-        {
-            const FLinearColor HSV(FMath::Fmod(Hue + i * R.FRandRange(15.f, 40.f), 360.f), R.FRandRange(0.2f, 0.45f), R.FRandRange(0.3f, 0.7f));
-            S.Colors[i] = HSV.HSVToLinearRGB();
-        }
-        return S;
+        return static_cast<int32>(RingNoise::Mix(RingNoise::Mix(RingNoise::Mix(static_cast<uint64>(World) ^ Salt) ^ static_cast<uint64>(A)) ^ static_cast<uint64>(B)) & 0x7FFFFFFF);
     }
 }
 
@@ -133,7 +100,35 @@ void ARingContentStreamer::BeginPlay()
     {
         ClearPoints.Add(It->GetActorLocation());
     }
-    UE_LOG(LogTemp, Warning, TEXT("[TM] Ring content: seed %d, %.0f m cells, %d authored zone(s)"), WorldSeed, CellSize / 100.0, AuthoredZones.Num());
+    // The map's fog and sun get tinted toward each region's look (relative to how the map set them).
+    for (TActorIterator<AExponentialHeightFog> It(GetWorld()); It; ++It)
+    {
+        if (UExponentialHeightFogComponent* C = It->GetComponent())
+        {
+            // Height fog measures height along world Z, but on the ring "up" is only world Z near
+            // where the map was built: elsewhere it went solid or vanished. So on the ring it becomes
+            // an even haze that follows the player, capped so the arch overhead always shows through.
+            Fog = C;
+            OrigFogColor = C->FogInscatteringLuminance;
+            OrigFogDensity = 0.0004f;
+            C->SetFogHeightFalloff(0.001f);
+            C->SetFogMaxOpacity(0.4f);
+            C->SetStartDistance(0.f);
+            C->SetFogDensity(OrigFogDensity);
+            break;
+        }
+    }
+    for (TActorIterator<ADirectionalLight> It(GetWorld()); It; ++It)
+    {
+        if (ULightComponent* C = It->GetLightComponent())
+        {
+            Sun = C;
+            OrigSunColor = C->GetLightColor();
+            break;
+        }
+    }
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Ring content: seed %d, %.0f m cells, %d authored zone(s), fog %s, sun %s"), WorldSeed, CellSize / 100.0,
+        AuthoredZones.Num(), Fog.IsValid() ? TEXT("yes") : TEXT("no"), Sun.IsValid() ? TEXT("yes") : TEXT("no"));
 }
 
 void ARingContentStreamer::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -191,15 +186,16 @@ void ARingContentStreamer::Tick(float DeltaSeconds)
     Super::Tick(DeltaSeconds);
     if (URingWorldSettings::GetSpec().bFlatWorldForTesting) return;
 
+    const APawn* Pawn = UGameplayStatics::GetPlayerPawn(this, 0);
     FVector Focus = FocusOverride;
     if (!bFocusOverride)
     {
-        const APawn* Pawn = UGameplayStatics::GetPlayerPawn(this, 0);
         if (!Pawn) return;
         Focus = Pawn->GetActorLocation();
     }
     UpdateCells(Focus);
     SpawnSome();
+    if (Pawn) UpdateRegion(Pawn->GetActorLocation(), DeltaSeconds);
 
     // Log each finished burst of building, so a play-test log shows what was generated where.
     const int32 Pending = GetPendingCount();
@@ -214,6 +210,57 @@ void ARingContentStreamer::Tick(float DeltaSeconds)
         UE_LOG(LogTemp, Warning, TEXT("[TM] Ring content ready near arc %.1f km / lateral %.1f km: +%d pieces (%d cells loaded, %d zombies alive)"),
             F.Arc / 1e5, F.Lateral / 1e5, SpawnedTotal - SpawnedAtLastReport, Cells.Num(), Zombies.Num());
         SpawnedAtLastReport = SpawnedTotal;
+    }
+}
+
+void ARingContentStreamer::UpdateRegion(const FVector& PlayerPos, float DeltaSeconds)
+{
+    const FRingWorldSpec& Spec = URingWorldSettings::GetSpec();
+    const APawn* Pawn = UGameplayStatics::GetPlayerPawn(this, 0);
+    const URingLaunchComponent* Launch = Pawn ? Pawn->FindComponentByClass<URingLaunchComponent>() : nullptr;
+    const bool bFlying = Launch && Launch->IsFlying();
+
+    RegionCheckIn -= DeltaSeconds;
+    if (RegionCheckIn <= 0.f && !bFlying)
+    {
+        RegionCheckIn = 0.25f;
+        const FRingCoords C = URingWorldGeometry::WorldToRing(Spec, PlayerPos);
+        const FRingRegions& Map = FRingRegions::Get(WorldSeed);
+        const FRingRegion& Here = Map.RegionAt(C.Arc, C.Lateral);
+        if (&Here != CurrentRegion)
+        {
+            CurrentRegion = &Here;
+            RegionEnteredAt = GetWorld()->GetRealTimeSeconds();
+            UE_LOG(LogTemp, Warning, TEXT("[TM] Region: %s (%s, danger %d) at arc %.1f km / lateral %.1f km"), *Here.Name,
+                FRingRegions::Biome(Here.Biome).Name, Here.Danger, C.Arc / 1e5, C.Lateral / 1e5);
+        }
+        float Density;
+        Map.Atmosphere(C.Arc, C.Lateral, FogTarget, Density, SunTarget);
+        FogDensityTarget = Density;
+        if (!bAtmosphereStarted)
+        {
+            bAtmosphereStarted = true;
+            FogNow = FogTarget;
+            SunNow = SunTarget;
+            FogDensityNow = FogDensityTarget;
+        }
+    }
+    if (!bAtmosphereStarted) return;
+
+    // Ease toward the region's look over a few seconds.
+    const float A = 1.f - FMath::Exp(-DeltaSeconds * 0.6f);
+    FogNow = FMath::Lerp(FogNow, FogTarget, A);
+    SunNow = FMath::Lerp(SunNow, SunTarget, A);
+    FogDensityNow = FMath::Lerp(FogDensityNow, FogDensityTarget, A);
+    if (UExponentialHeightFogComponent* F = Fog.Get())
+    {
+        if (AActor* FogActor = F->GetOwner()) FogActor->SetActorLocation(PlayerPos);
+        F->SetFogInscatteringColor(FMath::Lerp(OrigFogColor, FogNow * FMath::Max(OrigFogColor.GetLuminance(), 0.05f) / FMath::Max(FogNow.GetLuminance(), 0.05f), 0.65f));
+        F->SetFogDensity(OrigFogDensity * FMath::Clamp(FogDensityNow, 0.6f, 1.6f));
+    }
+    if (ULightComponent* L = Sun.Get())
+    {
+        L->SetLightColor(OrigSunColor * FMath::Lerp(FLinearColor::White, SunNow, 0.8f));
     }
 }
 
@@ -261,9 +308,11 @@ void ARingContentStreamer::UpdateCells(const FVector& Focus)
 void ARingContentStreamer::PlanCell(FCell& Cell)
 {
     const FRingWorldSpec& Spec = URingWorldSettings::GetSpec();
+    const FRingRegions& Map = FRingRegions::Get(WorldSeed);
     const double CArc = (Cell.ArcIdx + 0.5) * CellSize;
     const double CLat = (Cell.LatIdx + 0.5) * CellSize;
     const FTransform Frame = URingWorldGeometry::GetSurfaceFrame(Spec, FRingCoords(CArc, CLat, 0.0));
+    const FVector Up = Frame.GetUnitAxis(EAxis::Z);
 
     // Hand-built areas get nothing.
     for (const TPair<FVector, double>& Zone : AuthoredZones)
@@ -271,23 +320,47 @@ void ARingContentStreamer::PlanCell(FCell& Cell)
         if (FVector::Dist(Zone.Key, Frame.GetLocation()) < Zone.Value + CellSize * 0.75) return;
     }
 
-    const int64 RegionCells = FMath::Max<int64>(1, FMath::RoundToInt64(5.0e6 / CellSize));   // 50 km regions
-    const FRegionStyle Style = MakeRegionStyle(WorldSeed,
-        FMath::FloorToInt64(static_cast<double>(Cell.ArcIdx) / RegionCells), FMath::FloorToInt64(static_cast<double>(Cell.LatIdx) / RegionCells));
-    FRandomStream Rng(Seed3(WorldSeed, Cell.ArcIdx, Cell.LatIdx, 0xCE11ull));
-    const float H = 100.f * Style.Height;   // 1 m, scaled by the region's height
+    // The cell's biome sets everything below.
+    const FRingRegion& Region = Map.RegionAt(CArc, CLat);
+    const FRingBiomeInfo& Style = FRingRegions::Biome(Region.Biome);
+    FRandomStream Rng(CellSeed(WorldSeed, Cell.ArcIdx, Cell.LatIdx, 0xCE11ull));
+    const float H = 100.f * Style.PieceHeight * FMath::Lerp(0.85f, 1.15f, Rng.FRand());   // 1 m, scaled per biome
     const float Half = static_cast<float>(CellSize) * 0.5f;
 
-    // Local (x along the ring, y across, z up) box/cylinder of SizeM metres, sitting on the ground.
-    auto Place = [&](bool bCylinder, const FVector& LocalCenterCm, float Yaw, const FVector& SizeCm, int32 ColorIdx, float Pitch = 0.f)
+    // Terrain height under a local point (x along the ring, y across, cm).
+    auto GroundAt = [&](const FVector& Local) -> double
+    {
+        const FRingCoords RC = URingWorldGeometry::WorldToRing(Spec, Frame.TransformPosition(FVector(Local.X, Local.Y, 0.0)));
+        return Map.Height(RC.Arc, RC.Lateral);
+    };
+    // Lowest ground under a footprint (so nothing floats on a slope; the uphill side is buried).
+    auto BaseAt = [&](const FVector& C, float Yaw, float HalfX, float HalfY) -> double
+    {
+        const FVector Along = FRotator(0.f, Yaw, 0.f).Vector();
+        const FVector Across = FRotator(0.f, Yaw + 90.f, 0.f).Vector();
+        HalfX = FMath::Min(HalfX, 4000.f);
+        HalfY = FMath::Min(HalfY, 4000.f);
+        double G = GroundAt(C);
+        G = FMath::Min(G, GroundAt(C + Along * HalfX));
+        G = FMath::Min(G, GroundAt(C - Along * HalfX));
+        G = FMath::Min(G, GroundAt(C + Across * HalfY));
+        G = FMath::Min(G, GroundAt(C - Across * HalfY));
+        return G - 30.0;
+    };
+    constexpr double NoBase = -1.0e30;
+
+    // A box/cylinder of SizeCm on the ground (Base: shared ground height, or NoBase = its own).
+    auto Place = [&](bool bCylinder, const FVector& LocalCenterCm, float Yaw, const FVector& SizeCm, int32 ColorIdx,
+        float Pitch = 0.f, float Roll = 0.f, double Base = -1.0e30)
     {
         FPlanned P;
         P.bCylinder = bCylinder;
-        const FVector Local(LocalCenterCm.X, LocalCenterCm.Y, LocalCenterCm.Z + SizeCm.Z * 0.5f - 50.f);   // sink 50 cm
-        const FTransform LocalXf(FRotator(Pitch, Yaw, 0.f), Local, SizeCm / 100.f);
+        const double G = Base > NoBase ? Base : BaseAt(LocalCenterCm, Yaw, SizeCm.X * 0.5f, SizeCm.Y * 0.5f);
+        const FVector Local(LocalCenterCm.X, LocalCenterCm.Y, LocalCenterCm.Z + G + SizeCm.Z * 0.5f - 50.f);   // sink 50 cm
+        const FTransform LocalXf(FRotator(Pitch, Yaw, Roll), Local, SizeCm / 100.f);
         P.Xf = LocalXf * Frame;
         P.Footprint = FMath::Max(SizeCm.X, SizeCm.Y) * 0.5f;
-        P.Color = Style.Colors[ColorIdx % 3];
+        P.Color = Style.Piece[ColorIdx % 3];
         if (!IsClear(P.Xf.GetLocation(), LandingClearRadius + P.Footprint)) return;
         Cell.Pending.Add(P);
     };
@@ -298,7 +371,7 @@ void ARingContentStreamer::PlanCell(FCell& Cell)
     {
         const FVector C = RandIn(Half * 0.45f);
         const float Yaw = (Rng.FRand() < 0.5f) ? 0.f : 90.f;
-        const float Total = Style.WPillars + Style.WWalls + Style.WCanopy + Style.WMesa;
+        const float Total = Style.WPillars + Style.WWalls + Style.WCanopy + Style.WMesa + Style.WSpikes + Style.WCrystals + Style.WArches;
         float Pick = Rng.FRand() * Total;
 
         if ((Pick -= Style.WPillars) < 0.f)
@@ -328,18 +401,25 @@ void ARingContentStreamer::PlanCell(FCell& Cell)
         }
         else if ((Pick -= Style.WCanopy) < 0.f)
         {
-            // Canopy: a roof on four legs to ceiling-run under.
+            // Canopy: a roof on four legs to ceiling-run under (all on the lowest leg's ground).
             const float S = Rng.FRandRange(3000.f, 6000.f);
             const float Roof = Rng.FRandRange(10.f, 16.f) * H;
-            Place(false, C + FVector(0.f, 0.f, Roof), Yaw, FVector(S, S, 150.f), 0);
             const float Inset = S * 0.5f - 300.f;
+            FVector Legs[4];
+            double Base = 1.0e30;
             for (int32 i = 0; i < 4; ++i)
             {
                 const FVector Corner(i < 2 ? Inset : -Inset, (i % 2) ? Inset : -Inset, 0.f);
-                Place(true, C + FRotator(0.f, Yaw, 0.f).RotateVector(Corner), 0.f, FVector(200.f, 200.f, Roof + 50.f), 1);
+                Legs[i] = C + FRotator(0.f, Yaw, 0.f).RotateVector(Corner);
+                Base = FMath::Min(Base, BaseAt(Legs[i], 0.f, 100.f, 100.f));
+            }
+            Place(false, C + FVector(0.f, 0.f, Roof), Yaw, FVector(S, S, 150.f), 0, 0.f, 0.f, Base);
+            for (int32 i = 0; i < 4; ++i)
+            {
+                Place(true, Legs[i], 0.f, FVector(200.f, 200.f, Roof + 50.f), 1, 0.f, 0.f, Base);
             }
         }
-        else
+        else if ((Pick -= Style.WMesa) < 0.f)
         {
             // Mesas: stepped platforms with a ramp up the first.
             const int32 N = Rng.RandRange(2, 4);
@@ -348,18 +428,55 @@ void ARingContentStreamer::PlanCell(FCell& Cell)
             for (int32 i = 0; i < N; ++i)
             {
                 const float W = Rng.FRandRange(1000.f, 3000.f);
-                Place(false, P, Yaw, FVector(W, W, Height), i);
+                const double Base = BaseAt(P, Yaw, W * 0.5f, W * 0.5f);
+                Place(false, P, Yaw, FVector(W, W, Height), i, 0.f, 0.f, Base);
                 if (i == 0)
                 {
-                    // Ramp leading onto it (20 degrees).
+                    // Ramp leading onto it (20 degrees), from the same ground.
                     const FVector Along = FRotator(0.f, Yaw, 0.f).Vector();
                     const float RampLen = Height / FMath::Sin(FMath::DegreesToRadians(20.f));
                     const FVector Mid = P - Along * (W * 0.5f + RampLen * 0.45f);
-                    Place(false, Mid + FVector(0.f, 0.f, Height * 0.5f - 100.f), Yaw, FVector(RampLen, 600.f, 100.f), 2, 20.f);
+                    Place(false, Mid + FVector(0.f, 0.f, Height * 0.5f - 100.f), Yaw, FVector(RampLen, 600.f, 100.f), 2, 20.f, 0.f, Base);
                 }
                 P += FRotator(0.f, Yaw + Rng.FRandRange(-60.f, 60.f), 0.f).Vector() * W * 0.8f;
                 Height += Rng.FRandRange(2.f, 6.f) * H;
             }
+        }
+        else if ((Pick -= Style.WSpikes) < 0.f)
+        {
+            // Spikes: leaning shards (grapple anchors, cover, something to weave through).
+            const int32 N = Rng.RandRange(3, 8);
+            for (int32 i = 0; i < N; ++i)
+            {
+                const float D = Rng.FRandRange(150.f, 400.f);
+                const float Len = Rng.FRandRange(8.f, 30.f) * H;
+                Place(Rng.FRand() < 0.5f, C + RandIn(3000.f), Rng.FRandRange(0.f, 360.f), FVector(D, D, Len), i,
+                    Rng.FRandRange(-28.f, 28.f), Rng.FRandRange(-28.f, 28.f));
+            }
+        }
+        else if ((Pick -= Style.WCrystals) < 0.f)
+        {
+            // Crystal cluster: tilted blocks growing out of one spot.
+            const int32 N = Rng.RandRange(3, 6);
+            const float S = Rng.FRandRange(250.f, 600.f);
+            for (int32 i = 0; i < N; ++i)
+            {
+                const float Scale = Rng.FRandRange(0.6f, 1.4f);
+                Place(false, C + RandIn(S * 1.5f), Rng.FRandRange(0.f, 360.f), FVector(S * Scale, S * Scale, S * Scale * Rng.FRandRange(2.f, 5.f)) * (H / 100.f),
+                    i, Rng.FRandRange(-35.f, 35.f), Rng.FRandRange(-35.f, 35.f));
+            }
+        }
+        else
+        {
+            // Arch: two legs and a span to swing under or run across.
+            const float Span = Rng.FRandRange(1500.f, 4000.f);
+            const float ArchH = Rng.FRandRange(10.f, 25.f) * H;
+            const FVector Along = FRotator(0.f, Yaw, 0.f).Vector();
+            const FVector L0 = C - Along * Span * 0.5f, L1 = C + Along * Span * 0.5f;
+            const double Base = FMath::Min(BaseAt(L0, Yaw, 200.f, 200.f), BaseAt(L1, Yaw, 200.f, 200.f));
+            Place(false, L0, Yaw, FVector(400.f, 400.f, ArchH), 0, 0.f, 0.f, Base);
+            Place(false, L1, Yaw, FVector(400.f, 400.f, ArchH), 0, 0.f, 0.f, Base);
+            Place(false, C + FVector(0.f, 0.f, ArchH), Yaw, FVector(Span + 400.f, 400.f, 300.f), 1, 0.f, 0.f, Base);
         }
     }
 
@@ -371,18 +488,21 @@ void ARingContentStreamer::PlanCell(FCell& Cell)
         Place(false, RandIn(Half * 0.8f), Rng.FRandRange(0.f, 90.f), FVector(S, S * Rng.FRandRange(0.5f, 2.f), S), i);
     }
 
-    // Zombies, by the region's danger.
-    if (Rng.FRand() < Style.Danger * 0.5f)
+    // Zombies, by the region's danger (1-5).
+    if (Rng.FRand() < 0.06f * Region.Danger)
     {
-        const int32 N = Rng.RandRange(1, 3);
+        const int32 N = Rng.RandRange(1, 1 + Region.Danger / 2);
         for (int32 i = 0; i < N; ++i)
         {
             FPlanned Z;
             Z.bZombie = true;
-            Z.Xf = FTransform(FRotator(0.f, Rng.FRandRange(0.f, 360.f), 0.f), RandIn(Half * 0.8f) + FVector(0.f, 0.f, 150.f)) * Frame;
+            Z.Biome = static_cast<uint8>(Region.Biome);
+            const FVector Local = RandIn(Half * 0.8f);
+            Z.Xf = FTransform(FRotator(0.f, Rng.FRandRange(0.f, 360.f), 0.f), Local + FVector(0.f, 0.f, GroundAt(Local) + 150.0)) * Frame;
             if (IsClear(Z.Xf.GetLocation(), EnemyClearRadius)) Cell.Pending.Add(Z);
         }
     }
+    (void)Up;
 }
 
 UMaterialInstanceDynamic* ARingContentStreamer::GetColorMaterial(const FLinearColor& Color)
@@ -411,14 +531,21 @@ void ARingContentStreamer::SpawnSome()
             if (P.bZombie)
             {
                 if (Zombies.Num() >= MaxZombies) continue;
-                FActorSpawnParameters Params;
-                Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
-                if (AProceduralZombie* Z = GetWorld()->SpawnActor<AProceduralZombie>(AProceduralZombie::StaticClass(), P.Xf, Params))
+                AProceduralZombie* Z = GetWorld()->SpawnActorDeferred<AProceduralZombie>(AProceduralZombie::StaticClass(), P.Xf, nullptr, nullptr,
+                    ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn);
+                if (!Z) continue;
+                // The biome decides which bodies turn up (Bloats in the Ember Wastes, Gaunts on the ice...).
+                const FRingBiomeInfo& B = FRingRegions::Biome(static_cast<ERingBiome>(P.Biome));
+                for (FZombieArchetype& A : Z->Archetypes)
                 {
-                    Cell.Actors.Add(Z);
-                    Zombies.Add(Z);
-                    Budget -= 3;   // a zombie builds a whole body: count it as several pieces
+                    if (A.Name == TEXT("Husk")) A.Weight *= B.WHusk;
+                    else if (A.Name == TEXT("Bloat")) A.Weight *= B.WBloat;
+                    else if (A.Name == TEXT("Gaunt")) A.Weight *= B.WGaunt;
                 }
+                UGameplayStatics::FinishSpawningActor(Z, P.Xf);
+                Cell.Actors.Add(Z);
+                Zombies.Add(Z);
+                Budget -= 3;   // a zombie builds a whole body: count it as several pieces
                 continue;
             }
             ARingPiece* Piece = GetWorld()->SpawnActorDeferred<ARingPiece>(ARingPiece::StaticClass(), P.Xf, nullptr, nullptr,

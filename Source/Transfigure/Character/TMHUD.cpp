@@ -20,6 +20,8 @@
 #include "Ringworld/RingLaunchPad.h"
 #include "Ringworld/RingContentStreamer.h"
 #include "Combat/CombatWaveDirector.h"
+#include "Ringworld/RingRegions.h"
+#include "Transfiguration/SpellTypes.h"
 
 namespace
 {
@@ -94,7 +96,34 @@ void ATMHUD::DrawHUD()
     DrawSpellPanel(Char);
     DrawSpeedMeter(Char);
     if (Director) DrawRunInfo(Director);
+    DrawRegionInfo();
     DrawToasts();
+}
+
+void ATMHUD::DrawRegionInfo()
+{
+    const ARingContentStreamer* Streamer = ARingContentStreamer::Get(GetWorld());
+    const FRingRegion* Region = Streamer ? Streamer->GetCurrentRegion() : nullptr;
+    if (!Region) return;
+    const FRingBiomeInfo& Biome = FRingRegions::Biome(Region->Biome);
+    const FLinearColor Accent = Biome.Element != ETransfigurationElement::None
+        ? FMath::Lerp(USpellLibrary::GetElementColor(Biome.Element), FLinearColor::White, 0.25f)
+        : FLinearColor(0.95f, 0.88f, 0.7f);
+    const FString Sub = Biome.Element != ETransfigurationElement::None
+        ? FString::Printf(TEXT("%s  -  %s  -  Danger %d/5"), Biome.Name, *USpellLibrary::GetElementName(Biome.Element), Region->Danger)
+        : FString::Printf(TEXT("%s  -  Danger %d/5"), Biome.Name, Region->Danger);
+
+    // Always: where you are, in the top-left corner.
+    DrawLeftText(Region->Name, 40.f, 28.f, FLinearColor(1.f, 1.f, 1.f, 0.9f), 1.f);
+    DrawLeftText(Sub, 40.f, 50.f, FLinearColor(Accent.R, Accent.G, Accent.B, 0.85f), 0.8f);
+
+    // Just arrived: the name across the screen for a few seconds.
+    const float Age = static_cast<float>(RealNow() - Streamer->GetRegionEnteredTime());
+    if (Age < 0.f || Age > 4.5f) return;
+    const float A = FMath::Min(FMath::Clamp(Age / 0.4f, 0.f, 1.f), FMath::Clamp((4.5f - Age) / 1.f, 0.f, 1.f));
+    const float W = Canvas->ClipX, Y = Canvas->ClipY * 0.24f;
+    DrawCenteredText(Region->Name.ToUpper(), FVector2D(W * 0.5f, Y), FLinearColor(Accent.R, Accent.G, Accent.B, A), 2.4f);
+    DrawCenteredText(Sub, FVector2D(W * 0.5f, Y + 44.f), FLinearColor(1.f, 1.f, 1.f, 0.85f * A), 1.05f);
 }
 
 // ── arena run ───────────────────────────────────────────────────────────────

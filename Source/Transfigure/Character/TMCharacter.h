@@ -133,6 +133,10 @@ public:
     /** Headless check: start L_CombatArena with -TMArenaTest. Fights the first waves with
      *  auto-aim, stops defending and dies, restarts once, then quits. */
     void StartArenaTest();
+
+    /** Headless check: start L_RingArena with -TMRingTest. Looks up at the band, then visits one
+     *  region of each biome (lands on the terrain there, screenshot), then quits. */
+    void StartRingTest();
     /** Seconds since you were last wall running (0 while you are). */
     float GetTimeSinceWallRun() const { return TimeSinceWallRun; }
     /** Narrow the view by this much this frame (e.g. slingshot tension). Set every frame it applies. */
@@ -724,11 +728,17 @@ private:
     bool bSpellbookOpen = false;
     bool bIsDead = false;
     double DeathTime = 0.0;
+    /** Frames spent resting on ring terrain while still marked as falling (see SettleOntoTerrain). */
+    int32 TerrainSettleFrames = 0;
+    void SettleOntoTerrain();
     void HandleDeath();
     void RestartRun();
     void ArenaTestTick();
     FTimerHandle ArenaTestTimer;
     double ArenaTestStart = 0.0;
+    void RingTestStep();
+    FTimerHandle RingTestTimer;
+    int32 RingTestStepNum = 0;
     bool bOnSlipperyFloor = false;
     float SavedGroundFriction = 8.f;
     void SpellSmokeTestStep();

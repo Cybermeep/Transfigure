@@ -1,16 +1,21 @@
-﻿// RingBandGenerator.cpp
+// RingBandGenerator.cpp
 
 #include "RingBandGenerator.h"
 #include "RingWorldGeometry.h"
 #include "RingWorldSettings.h"
 #include "RingNearField.h"
 #include "RingContentStreamer.h"
+#include "RingRegions.h"
+#include "RingLaunchPad.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
+#include "Materials/MaterialInterface.h"
 
 #include "Components/DynamicMeshComponent.h"
 #include "UDynamicMesh.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "DynamicMesh/MeshNormals.h"
+#include "DynamicMesh/DynamicMeshAttributeSet.h"
 
 using namespace UE::Geometry;
 
@@ -50,7 +55,24 @@ void ARingBandGenerator::BeginPlay()
     Super::BeginPlay();
     if (bChangedFlatFlag)
     {
-        GetWorld()->SpawnActor<ARingNearField>(ARingNearField::StaticClass(), FTransform::Identity);
+        // Hand-built areas and pads stay flat (the terrain reads these; reset every play).
+        const FRingWorldSpec& Spec = URingWorldSettings::GetSpec();
+        FRingRegions::ResetFlatten();
+        for (TActorIterator<ARingAuthoredZone> It(GetWorld()); It; ++It)
+        {
+            const FRingCoords C = URingWorldGeometry::WorldToRing(Spec, It->GetActorLocation());
+            FRingRegions::AddFlatten(C.Arc, C.Lateral, It->Radius, 150000.0);
+        }
+        for (TActorIterator<ARingLaunchPad> It(GetWorld()); It; ++It)
+        {
+            const FRingCoords C = URingWorldGeometry::WorldToRing(Spec, It->GetActorLocation());
+            FRingRegions::AddFlatten(C.Arc, C.Lateral, 3000.0, 8000.0);
+        }
+        if (ARingNearField* NearField = GetWorld()->SpawnActor<ARingNearField>(ARingNearField::StaticClass(), FTransform::Identity))
+        {
+            NearField->WorldSeed = WorldSeed;
+        }
+        UE_LOG(LogTemp, Warning, TEXT("[TM] Ring regions: %d regions from seed %d"), FRingRegions::Get(WorldSeed).GetRegions().Num(), WorldSeed);
         if (bGenerateContent)
         {
             FActorSpawnParameters Params;
@@ -113,14 +135,31 @@ void ARingBandGenerator::GenerateRingBand()
     const double HalfWidth = Spec.Width * 0.5;
     const double WallTopR = Spec.Radius - Spec.RimWallHeight;
 
-    const double ProfileR[4] = { WallTopR, R, R, WallTopR };
-    const double ProfileY[4] = { -HalfWidth, -HalfWidth, HalfWidth, HalfWidth };
-    constexpr int32 ProfileCount = 4;
+    // Wall top, wall foot, LateralStrips+1 floor points, wall foot, wall top. The feet are
+    // doubled with the floor edge so walls keep their own colour.
+    const int32 Strips = FMath::Clamp(LateralStrips, 1, 64);
+    TArray<double> ProfileR, ProfileY;
+    TArray<bool> ProfileWall;
+    ProfileR.Add(WallTopR); ProfileY.Add(-HalfWidth); ProfileWall.Add(true);
+    ProfileR.Add(R); ProfileY.Add(-HalfWidth); ProfileWall.Add(true);
+    for (int32 k = 0; k <= Strips; ++k)
+    {
+        ProfileR.Add(R);
+        ProfileY.Add(-HalfWidth + Spec.Width * k / Strips);
+        ProfileWall.Add(false);
+    }
+    ProfileR.Add(R); ProfileY.Add(HalfWidth); ProfileWall.Add(true);
+    ProfileR.Add(WallTopR); ProfileY.Add(HalfWidth); ProfileWall.Add(true);
+    const int32 ProfileCount = ProfileR.Num();
+    const FRingRegions& Map = FRingRegions::Get(WorldSeed);
+    const FVector4f WallColor(0.05f, 0.055f, 0.07f, 1.f);
 
     DynamicMeshComponent->GetDynamicMesh()->EditMesh([&](FDynamicMesh3& Mesh)
     {
         Mesh.Clear();
         Mesh.EnableAttributes();
+        Mesh.Attributes()->EnablePrimaryColors();
+        FDynamicMeshColorOverlay* Colors = Mesh.Attributes()->PrimaryColors();
 
         // One ring of ProfileCount vertices per angular step.
         for (int32 Step = 0; Step < N; ++Step)
@@ -138,6 +177,16 @@ void ARingBandGenerator::GenerateRingBand()
                 const double Z = -ProfileR[P] * C;
 
                 Mesh.AppendVertex(FVector3d(X, Y, Z));
+                // One colour element per vertex, in the same order (element id = vertex id).
+                if (ProfileWall[P])
+                {
+                    Colors->AppendElement(WallColor);
+                }
+                else
+                {
+                    const FLinearColor MapC = Map.MapColor(Theta * Spec.Radius, ProfileY[P]);
+                    Colors->AppendElement(FVector4f(MapC.R, MapC.G, MapC.B, 1.f));
+                }
             }
         }
 
@@ -149,6 +198,8 @@ void ARingBandGenerator::GenerateRingBand()
 
             for (int32 P = 0; P < ProfileCount - 1; ++P)
             {
+                // Wall foot -> floor edge is the same point twice: no quad there.
+                if (P == 1 || P == ProfileCount - 3) continue;
                 const int32 A = Step * ProfileCount + P;
                 const int32 B = Step * ProfileCount + P + 1;
                 const int32 C2 = NextStep * ProfileCount + P + 1;
@@ -156,13 +207,20 @@ void ARingBandGenerator::GenerateRingBand()
 
                 // Two triangles per quad, wound so normals face toward the
                 // axis (inward, toward the habitable side you stand on).
-                Mesh.AppendTriangle(A, B, C2);
-                Mesh.AppendTriangle(A, C2, D);
+                const int32 T0 = Mesh.AppendTriangle(A, B, C2);
+                const int32 T1 = Mesh.AppendTriangle(A, C2, D);
+                if (T0 >= 0) Colors->SetTriangle(T0, FIndex3i(A, B, C2));
+                if (T1 >= 0) Colors->SetTriangle(T1, FIndex3i(A, C2, D));
             }
         }
 
         FMeshNormals::QuickComputeVertexNormals(Mesh);
     });
 
-    UE_LOG(LogTemp, Display, TEXT("RingBandGenerator: built %d triangles"), N * (ProfileCount - 1) * 2);
+    if (UMaterialInterface* BandMat = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/RingWorld/M_RingBand.M_RingBand"), nullptr, LOAD_NoWarn | LOAD_Quiet))
+    {
+        DynamicMeshComponent->SetMaterial(0, BandMat);
+    }
+
+    UE_LOG(LogTemp, Display, TEXT("RingBandGenerator: built %d triangles, %d regions"), N * (ProfileCount - 3) * 2, Map.GetRegions().Num());
 }

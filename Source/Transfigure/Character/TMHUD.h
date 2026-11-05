@@ -46,6 +46,8 @@ private:
     void DrawSpellbook(ATMCharacter* Char);
     void DrawSpellDetails(const UTransfigurationDefinition* Def, float X, float Y, float W);
     void DrawRunInfo(const class ACombatWaveDirector* Director);
+    /** Ring maps: region name in the corner, and a banner when you cross into a new one. */
+    void DrawRegionInfo();
     void DrawDeathScreen(const ATMCharacter* Char, const class ACombatWaveDirector* Director);
 
     void DrawCenteredText(const FString& Text, const FVector2D& Pos, const FLinearColor& Color, float Scale = 1.f);

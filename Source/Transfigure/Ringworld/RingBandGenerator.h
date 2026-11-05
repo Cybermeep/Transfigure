@@ -48,6 +48,10 @@ public:
     UPROPERTY(EditAnywhere, Category = "Ring World", meta = (ClampMin = "0.0"))
     double BandSink = 300.0;
 
+    /** Strips across the band's width, each coloured by the region under it (the map you see overhead). */
+    UPROPERTY(EditAnywhere, Category = "Ring World", meta = (ClampMin = "1", ClampMax = "64"))
+    int32 LateralStrips = 24;
+
     /**
      * Placing this actor in a map makes that map a ring world while it plays: curved
      * ring gravity (the Project Settings flag bFlatWorldForTesting is overridden off),

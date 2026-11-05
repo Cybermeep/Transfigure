@@ -40,6 +40,10 @@
 #include "RingFrameUtils.h"
 #include "EngineUtils.h"
 #include "Combat/CombatWaveDirector.h"
+#include "Ringworld/RingRegions.h"
+#include "Components/CapsuleComponent.h"
+#include "Ringworld/RingContentStreamer.h"
+#include "Ringworld/RingNearField.h"
 
 ATMCharacter::ATMCharacter()
 {
@@ -103,6 +107,10 @@ void ATMCharacter::BeginPlay()
     else if (FParse::Param(FCommandLine::Get(), TEXT("TMArenaTest")))
     {
         StartArenaTest();
+    }
+    else if (FParse::Param(FCommandLine::Get(), TEXT("TMRingTest")))
+    {
+        StartRingTest();
     }
     // The selected spell has to be on the wheel (the casting component set the wheel up in Super::BeginPlay).
     if (TransfigurationCasting)
@@ -170,6 +178,7 @@ void ATMCharacter::Tick(float DeltaTime)
     UpdateMomentumBraking();
     UpdateCameraEffects(DeltaTime);
     UpdateRingGravity(DeltaTime);
+    SettleOntoTerrain();
     StateMachine.Tick(DeltaTime);
 #if !UE_BUILD_SHIPPING
     // [TM] diagnostics. Remove once movement is confirmed.
@@ -643,6 +652,39 @@ float ATMCharacter::TakeDamage(float DamageAmount, FDamageEvent const& DamageEve
         Applied, *GetNameSafe(DamageCauser), Health);
     if (Health <= 0.f) HandleDeath();
     return Applied;
+}
+
+void ATMCharacter::SettleOntoTerrain()
+{
+    // On the ring's big terrain mesh, the movement component sometimes keeps a character that
+    // has come to rest on the ground in Falling (it never counts the landing, and slides down
+    // gentle slopes). If we're on a terrain tile, not moving along up, with walkable floor right
+    // under the feet for a few frames, we've landed. Only plain falling (not wall/ceiling runs).
+    UCharacterMovementComponent* CMC = GetCharacterMovement();
+    if (CMC->MovementMode != MOVE_Falling || bSurfaceUpOverride || IsWallRunning() || IsCeilingRunning())
+    {
+        TerrainSettleFrames = 0;
+        return;
+    }
+    if (FMath::Abs(FVector::DotProduct(CMC->Velocity, GetRingUp())) > 60.f)
+    {
+        TerrainSettleFrames = 0;
+        return;
+    }
+    FFindFloorResult Floor;
+    CMC->FindFloor(CMC->UpdatedComponent->GetComponentLocation(), Floor, false);
+    const bool bOnTerrain = Floor.HitResult.GetActor() && Floor.HitResult.GetActor()->IsA<ARingFloorTile>();
+    if (!bOnTerrain || !Floor.IsWalkableFloor() || Floor.FloorDist > 10.f)
+    {
+        TerrainSettleFrames = 0;
+        return;
+    }
+    if (++TerrainSettleFrames >= 3)
+    {
+        TerrainSettleFrames = 0;
+        CMC->SetMovementMode(MOVE_Walking);
+        UE_LOG(LogTemp, Log, TEXT("[TM] Settled onto ring terrain (was resting in Falling)"));
+    }
 }
 
 void ATMCharacter::HandleDeath()
@@ -1142,6 +1184,106 @@ void ATMCharacter::ArenaTestTick()
         Health = 0.f;
         HandleDeath();
     }
+}
+
+void ATMCharacter::StartRingTest()
+{
+    UE_LOG(LogTemp, Warning, TEXT("[TM] RING test: starting"));
+    bGodModeForTesting = true;
+    bInfiniteManaForTesting = true;
+    RingTestStepNum = 0;
+    GetWorldTimerManager().SetTimer(RingTestTimer, this, &ATMCharacter::RingTestStep, 4.f, true, 3.f);
+}
+
+void ATMCharacter::RingTestStep()
+{
+    const ARingContentStreamer* Streamer = ARingContentStreamer::Get(GetWorld());
+    const FRingWorldSpec& Spec = URingWorldSettings::GetSpec();
+    if (!Streamer || Spec.bFlatWorldForTesting)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[TM] RING test: not a ring map - quitting"));
+        GetWorldTimerManager().ClearTimer(RingTestTimer);
+        if (APlayerController* PC = Cast<APlayerController>(GetController())) PC->ConsoleCommand(TEXT("quit"));
+        return;
+    }
+    const FRingRegions& Map = FRingRegions::Get(Streamer->WorldSeed);
+    const int32 Step = RingTestStepNum++;
+
+    // One region of each biome (the first along the ring).
+    TArray<const FRingRegion*> Targets;
+    for (int32 B = 0; B < static_cast<int32>(ERingBiome::Count); ++B)
+    {
+        for (const FRingRegion& R : Map.GetRegions())
+        {
+            if (static_cast<int32>(R.Biome) == B) { Targets.Add(&R); break; }
+        }
+    }
+
+    auto Report = [this, &Map, &Spec, Streamer](const FString& Shot)
+    {
+        const FRingCoords C = URingWorldGeometry::WorldToRing(Spec, GetActorLocation());
+        const double Ground = Map.Height(C.Arc, C.Lateral);
+        const float Half = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+        const FRingRegion* Here = Streamer->GetCurrentRegion();
+        UE_LOG(LogTemp, Warning, TEXT("[TM] RING test %s: in %s, grounded %d, feet %.0f cm above the terrain (terrain %.1f m), %d pieces, %d pending"),
+            *Shot, Here ? *Here->Name : TEXT("?"), GetCharacterMovement()->IsMovingOnGround() ? 1 : 0,
+            C.Altitude - Half - Ground, Ground / 100.0, Streamer->GetSpawnedCount(), Streamer->GetPendingCount());
+        // Floor diagnostics: what the trace and the movement component see under the feet.
+        const FVector Up = URingWorldGeometry::GetSurfaceFrame(Spec, C).GetUnitAxis(EAxis::Z);
+        FHitResult Hit;
+        FCollisionQueryParams Params(SCENE_QUERY_STAT(RingTestFloor), true, this);
+        const bool bHit = GetWorld()->LineTraceSingleByChannel(Hit, GetActorLocation(), GetActorLocation() - Up * 500.f, ECC_Visibility, Params);
+        const double DH = Map.Height(C.Arc + 100.0, C.Lateral) - Map.Height(C.Arc - 100.0, C.Lateral);
+        const double DL = Map.Height(C.Arc, C.Lateral + 100.0) - Map.Height(C.Arc, C.Lateral - 100.0);
+        FFindFloorResult Floor;
+        GetCharacterMovement()->FindFloor(GetCharacterMovement()->UpdatedComponent->GetComponentLocation(), Floor, false);
+        UE_LOG(LogTemp, Warning, TEXT("[TM] RING test   floor: trace %d on %s, impact.up %.3f normal.up %.3f | slope %.1f deg | CMC floor hit %d walkable %d dist %.1f, mode %d, gravity.up %.3f"),
+            bHit ? 1 : 0, bHit ? *GetNameSafe(Hit.GetComponent()) : TEXT("-"), bHit ? FVector::DotProduct(Hit.ImpactNormal, Up) : 0.0,
+            bHit ? FVector::DotProduct(Hit.Normal, Up) : 0.0, FMath::RadiansToDegrees(FMath::Atan(FMath::Sqrt(DH * DH + DL * DL) / 200.0)),
+            Floor.bBlockingHit ? 1 : 0, Floor.bWalkableFloor ? 1 : 0, Floor.FloorDist, static_cast<int32>(GetCharacterMovement()->MovementMode),
+            FVector::DotProduct(-GetCharacterMovement()->GetGravityDirection(), Up));
+        FScreenshotRequest::RequestScreenshot(Shot, true, false);
+    };
+
+    if (Step == 0)
+    {
+        // At the arena: look up at the ring.
+        CameraPitch = 62.f;
+        FTimerHandle T;
+        GetWorldTimerManager().SetTimer(T, FTimerDelegate::CreateWeakLambda(this, [Report]() { Report(TEXT("Ring_00_ArenaLookUp")); }), 1.f, false);
+        return;
+    }
+    const int32 Visit = Step - 1;
+    if (Visit < Targets.Num())
+    {
+        const FRingRegion& R = *Targets[Visit];
+        const double HalfW = Spec.Width * 0.5;
+        const double Lo = R.LatLo < -1.0e11 ? -HalfW : R.LatLo, Hi = R.LatHi > 1.0e11 ? HalfW : R.LatHi;
+        const double Lat = FMath::Clamp((Lo + Hi) * 0.5, -0.35 * Spec.Width, 0.35 * Spec.Width);
+        const double Arc = (R.ArcStart + R.ArcEnd) * 0.5;
+        const double Ground = Map.Height(Arc, Lat);
+        const FTransform Frame = URingWorldGeometry::GetSurfaceFrame(Spec, FRingCoords(Arc, Lat, Ground + 250.0));
+        SetActorLocation(Frame.GetLocation(), false, nullptr, ETeleportType::TeleportPhysics);
+        GetCharacterMovement()->Velocity = FVector::ZeroVector;
+        CachedFacingForward = Frame.GetUnitAxis(EAxis::X);
+        CameraPitch = -8.f;
+        UE_LOG(LogTemp, Warning, TEXT("[TM] RING test: to %s (%s) at arc %.0f km / lateral %.0f km, terrain %.1f m"), *R.Name,
+            FRingRegions::Biome(R.Biome).Name, Arc / 1e5, Lat / 1e5, Ground / 100.0);
+        const FString Shot = FString::Printf(TEXT("Ring_%02d_%s"), Step, *FString(FRingRegions::Biome(R.Biome).Name).Replace(TEXT(" "), TEXT("")));
+        FTimerHandle T;
+        GetWorldTimerManager().SetTimer(T, FTimerDelegate::CreateWeakLambda(this, [Report, Shot]() { Report(Shot); }), 3.f, false);
+        return;
+    }
+    if (Visit == Targets.Num())
+    {
+        CameraPitch = 65.f;
+        FTimerHandle T;
+        GetWorldTimerManager().SetTimer(T, FTimerDelegate::CreateWeakLambda(this, [Report]() { Report(TEXT("Ring_99_LookUp")); }), 1.f, false);
+        return;
+    }
+    GetWorldTimerManager().ClearTimer(RingTestTimer);
+    UE_LOG(LogTemp, Warning, TEXT("[TM] RING test done (%d biomes visited) - quitting"), Targets.Num());
+    if (APlayerController* PC = Cast<APlayerController>(GetController())) PC->ConsoleCommand(TEXT("quit"));
 }
 
 void ATMCharacter::OnTriggerSigilPressed()

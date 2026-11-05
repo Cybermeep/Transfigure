@@ -4,9 +4,13 @@
 //
 // The ring is cut into square cells (200 m by default) on its surface. Each cell's
 // layout comes only from (WorldSeed, cell indices), so the same place always looks
-// the same. Coarser regions (50 km) pick a style for their cells: palette, density,
-// height, which features (pillar forests, wall mazes, canopies for ceiling runs,
-// mesas and ramps) and how many zombies.
+// the same. The region map (FRingRegions) decides each cell's biome: its colours,
+// structure kit (pillar forests, wall mazes, canopies for ceiling runs, mesas and
+// ramps, spikes, crystal clusters, arches), zombie mix and danger. Everything sits
+// on the terrain height there.
+//
+// It also tracks which region the player is in (the HUD banner reads it) and blends
+// the map's fog and sun toward that region's look.
 //
 // Cells near the "focus" are planned and spawned a few pieces per tick, far cells
 // are removed. While the player flies from a launch pad the focus is the landing
@@ -26,6 +30,9 @@ class UStaticMeshComponent;
 class UMaterialInterface;
 class UMaterialInstanceDynamic;
 class USphereComponent;
+class UExponentialHeightFogComponent;
+class ULightComponent;
+struct FRingRegion;
 
 /** One generated static piece (pillar, wall, slab...). */
 UCLASS(NotPlaceable)
@@ -110,6 +117,10 @@ public:
     int32 GetPendingCount() const;
     int32 GetSpawnedCount() const { return SpawnedTotal; }
 
+    /** The region the player is in (null until known), and the real time they entered it. */
+    const FRingRegion* GetCurrentRegion() const { return CurrentRegion; }
+    double GetRegionEnteredTime() const { return RegionEnteredAt; }
+
 protected:
     virtual void BeginPlay() override;
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -120,6 +131,7 @@ private:
     {
         bool bZombie = false;
         bool bCylinder = false;
+        uint8 Biome = 0;
         FTransform Xf;
         float Footprint = 0.f;
         FLinearColor Color = FLinearColor::Gray;
@@ -134,6 +146,7 @@ private:
 
     static int64 CellKey(int64 ArcIdx, int64 LatIdx) { return ArcIdx * 4096 + (LatIdx + 2048); }
     void UpdateCells(const FVector& Focus);
+    void UpdateRegion(const FVector& PlayerPos, float DeltaSeconds);
     void PlanCell(FCell& Cell);
     void SpawnSome();
     void UnloadCell(FCell& Cell);
@@ -149,6 +162,20 @@ private:
     int32 SpawnedAtLastReport = 0;
     bool bWasBuilding = false;
     TArray<TWeakObjectPtr<AActor>> Zombies;
+
+    // Region tracking and atmosphere.
+    const FRingRegion* CurrentRegion = nullptr;
+    double RegionEnteredAt = -100.0;
+    float RegionCheckIn = 0.f;
+    TWeakObjectPtr<UExponentialHeightFogComponent> Fog;
+    TWeakObjectPtr<ULightComponent> Sun;
+    FLinearColor OrigFogColor = FLinearColor::White, OrigSunColor = FLinearColor::White;
+    float OrigFogDensity = 0.02f;
+    FLinearColor FogTarget = FLinearColor::White, SunTarget = FLinearColor::White;
+    float FogDensityTarget = 1.f;
+    FLinearColor FogNow = FLinearColor::White, SunNow = FLinearColor::White;
+    float FogDensityNow = 1.f;
+    bool bAtmosphereStarted = false;
 
     UPROPERTY()
     TObjectPtr<UStaticMesh> CubeMesh;

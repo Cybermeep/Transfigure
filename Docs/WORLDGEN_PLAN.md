@@ -7,7 +7,16 @@ Goal: the ring reads as many distinct places, both up close and from afar:
 
 Hand-built levels come later and sit inside `ARingAuthoredZone`s, which the generator keeps flat and empty. Everything is deterministic from `WorldSeed`, so the same spot always looks the same. Sizes: **S** about an hour, **M** a few hours, **L** a long block.
 
-## What's there now
+## Status (2026-11-05)
+
+**Phase 1 (R1–R7) is in.** Seed 1337 gives 185 regions.
+
+`-TMRingTest` checks it headlessly: it visits one region of each biome, lands on the terrain and takes screenshots. Notes from building it:
+- **Terrain tiles** take about 70 ms to build, about once per km travelled. Moving this to a background thread is a later item.
+- **Fog:** Unreal's height fog can't work on the ring, because it measures height along world Z, which is only "up" near where the map was built. In ring maps the content streamer turns it into an even haze that follows the player, with a capped thickness so the arch overhead always shows. Each biome tints it.
+- **Landing on terrain:** the engine's movement component sometimes keeps a character resting on the terrain mesh in Falling mode. `ATMCharacter::SettleOntoTerrain` switches it back to walking when there's walkable terrain floor right underneath.
+
+## What was there before this plan
 
 - **The ring:** 1,600 km radius, 200 km wide (about 10,050 km round), 100 km rim walls.
 - **Band:** `ARingBandGenerator` draws the whole band as one grey mesh, turns on ring gravity, and spawns the near field and the content streamer.
