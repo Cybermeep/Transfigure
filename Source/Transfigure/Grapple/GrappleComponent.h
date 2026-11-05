@@ -29,7 +29,16 @@ public:
 
     // Configuration
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Config")
-    float MaxGrappleRange = 4000.0f;
+    float MaxGrappleRange = 15000.0f;
+
+    /** Enemies further than this can't be combat-grappled (kick, pull...). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Config")
+    float CombatGrappleRange = 4000.0f;
+
+    /** Swing: if you're moving mostly AWAY from the anchor when the rope goes tight (you passed a
+     *  ground anchor, say), let go and keep the speed instead of being stopped dead. 1 = never. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Swing", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+    float SwingReleaseAwayDot = 0.6f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Config")
     float SwingStrength = 1.0f;
@@ -40,13 +49,49 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Config")
     float MaxSwingTime = 3.0f;
 
-    /** Overhead/other anchors: speed added toward the anchor when the rope attaches. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel")
-    float SwingPullSpeed = 1500.f;
+    /** Ceilings / non-wall surfaces swing (pendulum) instead of pulling you in. Small tug toward the anchor on attach. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Swing")
+    float SwingAttachTug = 250.f;
 
-    /** Overhead/other anchors: how fast the rope shortens while swinging (cm/s). 0 = fixed length. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel")
-    float ReelInSpeed = 600.f;
+    /** Swing: how fast the rope shortens (cm/s). 0 = fixed length, a true pendulum. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Swing")
+    float SwingReelInSpeed = 0.f;
+
+    // ── CORNER SWING: grapple the wall you're running into, hold, swing round into a wall run along it ──
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|CornerSwing")
+    bool bEnableCornerSwing = true;
+
+    /** Only when you're at most this far from the wall you hit (further away = the normal yank). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|CornerSwing")
+    float CornerSwingMaxDistance = 1000.f;
+
+    /** How head-on you must be moving into the wall (1 = straight at it, 0.5 = within 60 degrees). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|CornerSwing", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+    float CornerSwingMinApproach = 0.5f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|CornerSwing")
+    float CornerSwingMinSpeed = 400.f;
+
+    /** Speed multiplier through the turn (your momentum is kept, plus this). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|CornerSwing")
+    float CornerSwingSpeedBoost = 1.15f;
+
+    /** Tightest turn radius (cm). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|CornerSwing")
+    float CornerSwingMinRadius = 150.f;
+
+    /** Gravity while swinging round (like a wall run, so you don't drop). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|CornerSwing")
+    float CornerSwingGravityScale = 0.1f;
+
+    // ── CEILING ──
+    /** A surface whose normal points down at least this much counts as a ceiling. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Ceiling", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+    float CeilingMinDownDot = 0.7f;
+
+    /** Ceiling grapple at full speed: start the ceiling run once your capsule is this close to the ceiling (cm). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Ceiling")
+    float CeilingArrivalSlack = 40.f;
 
     /** Wall anchors (vertical surfaces): yank speed. Faster, to feed wall running. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Wall")
@@ -274,6 +319,15 @@ private:
 
     /** Current swing is anchored on a wall (vertical surface). */
     bool bWallAnchor = false;
+
+    /** What the rope does: pendulum, yank to a wall, swing round a wall, or yank to a ceiling run. */
+    enum class ESwingMode : uint8 { Swing, WallPull, CornerSwing, CeilingPull };
+    ESwingMode SwingMode = ESwingMode::Swing;
+    FVector CornerExitDir = FVector::ZeroVector;
+    float CornerSpeed = 0.f;
+    float CeilingEntrySpeed = 0.f;
+    void UpdateCornerSwing(float DeltaTime);
+    void ArriveAtCeiling();
     FVector AnchorNormal = FVector::ZeroVector;
 
     // ── BUG 3 FIX: Stores evade direction set from input handler ──

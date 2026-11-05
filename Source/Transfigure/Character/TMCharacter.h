@@ -93,6 +93,70 @@ public:
     /** Set by the wall-run state: -1 wall on the left, +1 on the right, 0 when not wall running. */
     float WallRunSide = 0.f;
 
+    // ── MOMENTUM ──
+    /** On the ground faster than walk/sprint speed (after a grapple, wall run, slam...), you coast
+     *  down at this rate (cm/s^2) instead of the normal hard stop, with or without input. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|Momentum")
+    float OverspeedGroundDeceleration = 450.f;
+
+    // ── CEILING RUN (grapple a ceiling at full speed) ──
+    /** How far into the speed zoom-out you must be (1 = fully zoomed out) for a ceiling grapple to become a ceiling run. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|CeilingRun", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+    float CeilingRunSpeedAlpha = 0.95f;
+
+    /** Seconds on the ceiling per 1000 cm/s of speed you arrived with. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|CeilingRun")
+    float CeilingRunTimePer1000Speed = 0.8f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|CeilingRun")
+    float CeilingRunMinTime = 0.6f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|CeilingRun")
+    float CeilingRunMaxTime = 3.0f;
+
+    /** Speed lost per second on the ceiling (cm/s^2). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|CeilingRun")
+    float CeilingRunDeceleration = 600.f;
+
+    /** Drop off the ceiling below this speed. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|CeilingRun")
+    float CeilingRunMinSpeed = 500.f;
+
+    /** After dropping, no new ceiling run for this long (stops the view flipping back and forth). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|CeilingRun")
+    float CeilingRunCooldown = 1.5f;
+
+    /** How long the camera takes to roll over when you land on / leave the ceiling. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|CeilingRun")
+    float CeilingFlipDuration = 0.45f;
+
+    /** How hard you're pressed into the ceiling while running on it (cm/s). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|CeilingRun")
+    float CeilingStickSpeed = 150.f;
+
+    /** Push away from the ceiling when you drop off (cm/s). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|CeilingRun")
+    float CeilingDropSpeed = 300.f;
+
+    /** 0..1: how far the current ground speed is into the speed zoom-out (1 = full effect). */
+    float GetSpeedFOVAlpha() const;
+    /** Fast enough and not cooling down from a previous ceiling run. */
+    bool CanStartCeilingRun() const;
+    bool IsCeilingRunning() const { return CurrentStateName == TEXT("CeilingRun"); }
+    void StartCeilingRunCooldown();
+
+    /**
+     * Change which way is "up" for the character (bOverride=false: back to ring up).
+     * Re-orients the actor immediately while keeping the camera's view exactly where
+     * it was; the leftover roll then eases out over CeilingFlipDuration.
+     */
+    void SetSurfaceUp(const FVector& NewUp, bool bOverride);
+    FVector GetSurfaceUp() const { return bSurfaceUpOverride ? SurfaceUpOverride : CachedRingUp; }
+
+    /** Filled in by the grapple right before it starts a ceiling run. */
+    FVector CeilingRunNormal = FVector::DownVector;
+    float CeilingRunEntrySpeed = 0.f;
+
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement")
     float WallJumpLateralBoost = 500.f;
 
@@ -566,9 +630,21 @@ private:
     /** Camera yaw offset (degrees) left over from a facing snap; decays to 0. */
     float CameraYawOffset = 0.0f;
 
-    /** Current camera roll (wall-run / temporal tilt) and FOV, eased every tick. */
+    /** Current camera roll (wall-run tilt) and FOV, eased every tick. */
     float CameraRoll = 0.0f;
     float CurrentFOV = 90.0f;
+
+    /** Extra roll left over from a ceiling flip, eased from CameraFlipStart to 0. */
+    float CameraFlipRoll = 0.0f;
+    float CameraFlipStart = 0.0f;
+    float CameraFlipElapsed = 0.0f;
+
+    bool bSurfaceUpOverride = false;
+    bool bOverspeedBraking = false;
+    float DefaultBrakingDecelerationWalking = 2048.f;
+    void UpdateMomentumBraking();
+    FVector SurfaceUpOverride = FVector::UpVector;
+    float CeilingRunReadyTime = 0.0f;
 
     UPROPERTY()
     TObjectPtr<UCameraComponent> ViewCamera;

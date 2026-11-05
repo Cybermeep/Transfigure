@@ -9,6 +9,7 @@
 #include "States/TMState_DoubleJump.h"
 #include "States/TMState_WallRun.h"
 #include "States/TMState_WallJump.h"
+#include "States/TMState_CeilingRun.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
@@ -82,6 +83,7 @@ void ATMCharacter::BeginPlay()
         UE_LOG(LogTemp, Error, TEXT("[TM] No CameraPitchTarget and no SpringArm on %s - camera pitch will not work"), *GetName());
     }
     SetupFirstPersonCamera();
+    DefaultBrakingDecelerationWalking = GetCharacterMovement()->BrakingDecelerationWalking;
     if (!GetMesh() || !GetMesh()->GetSkeletalMeshAsset())
     {
         UE_LOG(LogTemp, Warning, TEXT("[TM] %s has no skeletal mesh assigned - the player will be invisible"), *GetName());
@@ -128,6 +130,7 @@ void ATMCharacter::NotifyControllerChanged()
 void ATMCharacter::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
+    UpdateMomentumBraking();
     UpdateCameraEffects(DeltaTime);
     UpdateRingGravity(DeltaTime);
     StateMachine.Tick(DeltaTime);
@@ -171,31 +174,32 @@ void ATMCharacter::UpdateRingGravity(float DeltaTime)
     // RotateGravityToWorld for floor detection, walkable-slope checks, and
     // gravity integration, so IsMovingOnGround() and normal walking physics
     // keep working correctly without us reimplementing floor traces.
-    GetCharacterMovement()->SetGravityDirection(-CachedRingUp);
+    const FVector SurfUp = GetSurfaceUp();
+    GetCharacterMovement()->SetGravityDirection(-SurfUp);
 
     // Apply accumulated yaw around the CURRENT up axis, then re-orthonormalize
     // against the (possibly just-changed) up so facing direction stays valid
     // as the surface curves underneath us.
     if (!FMath::IsNearlyZero(PendingYawInput))
     {
-        const FQuat YawRot(CachedRingUp, FMath::DegreesToRadians(PendingYawInput));
+        const FQuat YawRot(SurfUp, FMath::DegreesToRadians(PendingYawInput));
         CachedFacingForward = YawRot.RotateVector(CachedFacingForward);
         PendingYawInput = 0.0f;
     }
     CachedFacingForward = (CachedFacingForward -
-        CachedRingUp * FVector::DotProduct(CachedFacingForward, CachedRingUp)).GetSafeNormal();
+        SurfUp * FVector::DotProduct(CachedFacingForward, SurfUp)).GetSafeNormal();
 
     if (CachedFacingForward.IsNearlyZero())
     {
         // Degenerate only if we were somehow facing exactly along the axis.
-        CachedFacingForward = FVector::CrossProduct(FVector::RightVector, CachedRingUp).GetSafeNormal();
+        CachedFacingForward = FVector::CrossProduct(FVector::RightVector, SurfUp).GetSafeNormal();
     }
 
     // Set the actor's rotation directly from the (Forward, Right, Up) basis.
     // Every state function calls GetActorForwardVector()/GetActorRightVector()
     // already — this is the one change that makes all of them correct on the
     // ring without touching their bodies.
-    SetActorRotation(FRotationMatrix::MakeFromXZ(CachedFacingForward, CachedRingUp).ToQuat());
+    SetActorRotation(FRotationMatrix::MakeFromXZ(CachedFacingForward, SurfUp).ToQuat());
 
     // Pitch is camera-only, never touches the actor.
     if (!FMath::IsNearlyZero(PendingPitchInput))
@@ -207,7 +211,7 @@ void ATMCharacter::UpdateRingGravity(float DeltaTime)
     {
         // Ease out any yaw offset left by a facing snap.
         CameraYawOffset = FMath::FInterpTo(CameraYawOffset, 0.0f, DeltaTime, CameraRecenterSpeed);
-        CameraPitchTarget->SetRelativeRotation(FRotator(CameraPitch, CameraYawOffset, CameraRoll));
+        CameraPitchTarget->SetRelativeRotation(FRotator(CameraPitch, CameraYawOffset, CameraRoll + CameraFlipRoll));
     }
 }
 
@@ -256,9 +260,21 @@ void ATMCharacter::UpdateCameraEffects(float DeltaTime)
     const float TargetRoll = -WallRunSide * WallRunCameraTilt;
     CameraRoll = FMath::FInterpTo(CameraRoll, TargetRoll, DeltaTime, CameraTiltSpeed);
 
+    // Ceiling flip: one smooth roll over a fixed time, never re-triggered mid-way.
+    if (!FMath::IsNearlyZero(CameraFlipStart))
+    {
+        CameraFlipElapsed += DeltaTime;
+        const float T = FMath::Clamp(CameraFlipElapsed / FMath::Max(CeilingFlipDuration, 0.01f), 0.f, 1.f);
+        CameraFlipRoll = FMath::Lerp(CameraFlipStart, 0.f, FMath::SmoothStep(0.f, 1.f, T));
+        if (T >= 1.f)
+        {
+            CameraFlipStart = 0.f;
+            CameraFlipRoll = 0.f;
+        }
+    }
+
     // FOV: widen with ground speed so going fast feels fast.
-    const float Speed = URingFrameUtils::StripVertical(GetVelocity(), CachedRingUp).Size();
-    const float SpeedAlpha = FMath::Clamp((Speed - SpeedFOVStartSpeed) / FMath::Max(SpeedFOVFullSpeed - SpeedFOVStartSpeed, 1.f), 0.f, 1.f);
+    const float SpeedAlpha = GetSpeedFOVAlpha();
     const float TargetFOV = (bIsTemporalActive ? TemporalCameraFOV : BaseFOV) + SpeedFOVBoost * SpeedAlpha;
     // The clap snaps the view wide; leaving it (and speed changes) ease more gently.
     const float FOVSpeed = (bIsTemporalActive && TargetFOV > CurrentFOV) ? TemporalFOVChangeSpeed : FOVChangeSpeed;
@@ -267,6 +283,88 @@ void ATMCharacter::UpdateCameraEffects(float DeltaTime)
     {
         ViewCamera->SetFieldOfView(CurrentFOV);
     }
+}
+
+void ATMCharacter::UpdateMomentumBraking()
+{
+    UCharacterMovementComponent* CMC = GetCharacterMovement();
+    if (CurrentStateName == TEXT("Slide"))
+    {
+        // The slide sets its own friction; just hand back the friction mode.
+        if (bOverspeedBraking)
+        {
+            CMC->bUseSeparateBrakingFriction = false;
+            bOverspeedBraking = false;
+        }
+        return;
+    }
+    const float Speed = URingFrameUtils::StripVertical(GetVelocity(), CachedRingUp).Size();
+    const bool bOver = CMC->IsMovingOnGround() && Speed > CMC->MaxWalkSpeed + 50.f;
+    if (bOver)
+    {
+        // Coast: no friction, gentle deceleration. Normal braking resumes near walking speed.
+        CMC->bUseSeparateBrakingFriction = true;
+        CMC->BrakingFriction = 0.f;
+        CMC->BrakingDecelerationWalking = OverspeedGroundDeceleration;
+        bOverspeedBraking = true;
+    }
+    else if (bOverspeedBraking)
+    {
+        CMC->bUseSeparateBrakingFriction = false;
+        CMC->BrakingDecelerationWalking = DefaultBrakingDecelerationWalking;
+        bOverspeedBraking = false;
+    }
+}
+
+float ATMCharacter::GetSpeedFOVAlpha() const
+{
+    const float Speed = URingFrameUtils::StripVertical(GetVelocity(), CachedRingUp).Size();
+    return FMath::Clamp((Speed - SpeedFOVStartSpeed) / FMath::Max(SpeedFOVFullSpeed - SpeedFOVStartSpeed, 1.f), 0.f, 1.f);
+}
+
+bool ATMCharacter::CanStartCeilingRun() const
+{
+    return !IsCeilingRunning() && GetWorld()->GetTimeSeconds() >= CeilingRunReadyTime
+        && GetSpeedFOVAlpha() >= CeilingRunSpeedAlpha;
+}
+
+void ATMCharacter::StartCeilingRunCooldown()
+{
+    CeilingRunReadyTime = GetWorld()->GetTimeSeconds() + CeilingRunCooldown;
+}
+
+void ATMCharacter::SetSurfaceUp(const FVector& NewUp, bool bOverride)
+{
+    // Where the camera looks right now, in world space.
+    const FQuat CamWorld = GetActorQuat() * FRotator(CameraPitch, CameraYawOffset, CameraRoll + CameraFlipRoll).Quaternion();
+
+    bSurfaceUpOverride = bOverride && !NewUp.IsNearlyZero();
+    SurfaceUpOverride = NewUp.GetSafeNormal();
+    const FVector Up = GetSurfaceUp();
+
+    FVector Fwd = FVector::VectorPlaneProject(CachedFacingForward, Up).GetSafeNormal();
+    if (Fwd.IsNearlyZero())
+    {
+        Fwd = FVector::VectorPlaneProject(GetActorUpVector(), Up).GetSafeNormal();
+    }
+    CachedFacingForward = Fwd;
+    SetActorRotation(FRotationMatrix::MakeFromXZ(Fwd, Up).ToQuat());
+    GetCharacterMovement()->SetGravityDirection(-Up);
+
+    // Same view, expressed relative to the re-oriented body. Pitch/yaw carry over; the
+    // roll (about 180 for a ceiling) is what we ease out, so the world turns over smoothly.
+    const FRotator Rel = (GetActorQuat().Inverse() * CamWorld).Rotator();
+    CameraPitch = FMath::Clamp(Rel.Pitch, MinCameraPitch, MaxCameraPitch);
+    CameraYawOffset = Rel.Yaw;
+    CameraFlipStart = FRotator::NormalizeAxis(Rel.Roll - CameraRoll);
+    CameraFlipRoll = CameraFlipStart;
+    CameraFlipElapsed = 0.f;
+    if (CameraPitchTarget)
+    {
+        CameraPitchTarget->SetRelativeRotation(FRotator(CameraPitch, CameraYawOffset, CameraRoll + CameraFlipRoll));
+    }
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Surface up %s, camera roll %.0f to ease out"),
+        bSurfaceUpOverride ? TEXT("-> ceiling") : TEXT("-> ring"), CameraFlipStart);
 }
 
 void ATMCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -352,6 +450,11 @@ void ATMCharacter::OnJumpPressed()
 {
     UE_LOG(LogTemp, Warning, TEXT("[TM] Jump pressed  State=%s  JumpsRemaining=%d  Grounded=%d"),
         *CurrentStateName, JumpsRemaining, GetCharacterMovement()->IsMovingOnGround() ? 1 : 0);
+    if (IsCeilingRunning())
+    {
+        TransitionTo<TMState_Fall>();   // drop off; Exit flips the view back
+        return;
+    }
     if (JumpsRemaining <= 0) return;
 
     --JumpsRemaining;
@@ -378,19 +481,20 @@ void ATMCharacter::OnJumpPressed()
 
 void ATMCharacter::SetFacingDirection(const FVector& Direction)
 {
-    const FVector Flat = FVector::VectorPlaneProject(Direction, CachedRingUp).GetSafeNormal();
+    const FVector SurfUp = GetSurfaceUp();
+    const FVector Flat = FVector::VectorPlaneProject(Direction, SurfUp).GetSafeNormal();
     if (Flat.IsNearlyZero()) return;
 
     // Signed yaw change around local up. The camera is offset by the opposite
     // amount so its world direction doesn't move this frame, then eases in.
     const float Cos = FVector::DotProduct(CachedFacingForward, Flat);
-    const float Sin = FVector::DotProduct(FVector::CrossProduct(CachedFacingForward, Flat), CachedRingUp);
+    const float Sin = FVector::DotProduct(FVector::CrossProduct(CachedFacingForward, Flat), SurfUp);
     const float DeltaYaw = FMath::RadiansToDegrees(FMath::Atan2(Sin, Cos));
     CameraYawOffset = FRotator::NormalizeAxis(CameraYawOffset - DeltaYaw);
 
     CachedFacingForward = Flat;
     // Apply now (not next tick) so side traces like wall-run detection see the new facing.
-    SetActorRotation(FRotationMatrix::MakeFromXZ(Flat, CachedRingUp).ToQuat());
+    SetActorRotation(FRotationMatrix::MakeFromXZ(Flat, SurfUp).ToQuat());
 }
 
 // ── DAMAGE ──
@@ -497,6 +601,10 @@ bool ATMCharacter::TraceFromView(FHitResult& OutHit, float Range) const
 
 void ATMCharacter::OnGrapplePressed()
 {
+    if (IsCeilingRunning())
+    {
+        TransitionTo<TMState_Fall>();
+    }
     FHitResult Hit;
     if (GrappleComponent && TraceFromView(Hit, GrappleComponent->MaxGrappleRange))
     {
@@ -533,6 +641,10 @@ void ATMCharacter::OnGrappleSlamPressed()
     // Slam is a movement tech: aim anywhere (floor, wall, enemy). Aiming at
     // nothing in the air turns it into a ground-pound.
     if (!GrappleComponent) return;
+    if (IsCeilingRunning())
+    {
+        TransitionTo<TMState_Fall>();
+    }
     FHitResult Hit;
     const bool bHit = TraceFromView(Hit, GrappleComponent->MaxGrappleRange);
     GrappleComponent->StartSlam(Hit.ImpactPoint, Hit.ImpactNormal, Hit.GetActor(), bHit);
