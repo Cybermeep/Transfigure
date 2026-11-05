@@ -86,6 +86,7 @@ public:
 
     // ABaseEnemy
     virtual void TakePoolDamage(float DamageAmount, FVector HitLocation) override;
+    virtual void TakeAreaDamage(float Damage, FVector Origin, float InnerRadius, float OuterRadius) override;
     virtual void OnSpawnFromPool() override;
 
 protected:
@@ -97,6 +98,8 @@ private:
     void EnsureBodyAssets();
     void BuildPart(int32 Index, FRandomStream& Rng, float Fatness);
     int32 FindHitPart(const FVector& HitLocation) const;
+    /** Distance from Location to part Index's hit-zone surface. */
+    float DistanceToPart(int32 Index, const FVector& Location) const;
     void SeverPart(int32 Index, const FVector& HitLocation);
     void UpdateCripple();
     void StopRagdoll();

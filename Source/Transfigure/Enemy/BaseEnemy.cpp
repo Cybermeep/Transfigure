@@ -261,6 +261,19 @@ float ABaseEnemy::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent
     return Applied;
 }
 
+float ABaseEnemy::AreaFalloff(float Distance, float InnerRadius, float OuterRadius)
+{
+    if (Distance > OuterRadius) return 0.f;
+    if (Distance <= InnerRadius || OuterRadius <= InnerRadius) return 1.f;
+    return FMath::GetMappedRangeValueClamped(FVector2D(InnerRadius, OuterRadius), FVector2D(1.f, 0.5f), Distance);
+}
+
+void ABaseEnemy::TakeAreaDamage(float Damage, FVector Origin, float InnerRadius, float OuterRadius)
+{
+    const float Scale = AreaFalloff(FVector::Dist(Origin, GetActorLocation()), InnerRadius, OuterRadius);
+    if (Scale > 0.f) TakePoolDamage(Damage * Scale, Origin);
+}
+
 void ABaseEnemy::TakePoolDamage(float DamageAmount, FVector HitLocation)
 {
     if (!bIsAlive) return;

@@ -2,6 +2,7 @@
 // FULL REPLACEMENT — fills in the swing physics stub with Verlet integration.
 
 #include "Grapple/GrappleComponent.h"
+#include "Transfigure.h"
 #include "Grapple/GrappleLine.h"
 #include "Grapple/CombatGrappleMove.h"
 #include "Enemy/BaseEnemy.h"
@@ -322,9 +323,10 @@ void UGrappleComponent::SlamImpact(const FVector& Location, const FVector& Norma
     const float Damage = SlamDamage * SlamMomentumScale;
     const float Knockback = SlamKnockback * SlamMomentumScale;
 
+    // Weapon channel: finds enemy capsules and zombie hit zones, including on corpses.
     TArray<FOverlapResult> Overlaps;
     FCollisionQueryParams Params(SCENE_QUERY_STAT(GrappleSlam), false, OwnerCharacter);
-    GetWorld()->OverlapMultiByChannel(Overlaps, Location, FQuat::Identity, ECC_Pawn,
+    GetWorld()->OverlapMultiByChannel(Overlaps, Location, FQuat::Identity, ECC_Weapon,
         FCollisionShape::MakeSphere(Radius), Params);
 
     TSet<ABaseEnemy*> Hit;
@@ -334,10 +336,8 @@ void UGrappleComponent::SlamImpact(const FVector& Location, const FVector& Norma
         if (!Enemy || Hit.Contains(Enemy)) continue;
         Hit.Add(Enemy);   // corpses included: they can still lose limbs
 
-        // Closer = more damage (full at the centre, half at the edge).
-        const float Dist = FVector::Dist(Location, Enemy->GetActorLocation());
-        const float Falloff = FMath::GetMappedRangeValueClamped(FVector2D(0.f, Radius), FVector2D(1.f, 0.5f), Dist);
-        Enemy->TakePoolDamage(Damage * Falloff * OwnerCharacter->GetDamageMultiplier(), Location);
+        // Full at the centre, half at the edge; zombies spread it over every part in range.
+        Enemy->TakeAreaDamage(Damage * OwnerCharacter->GetDamageMultiplier(), Location, 0.f, Radius);
 
         if (Enemy->IsAlive())
         {

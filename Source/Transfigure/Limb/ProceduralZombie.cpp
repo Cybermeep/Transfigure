@@ -232,24 +232,26 @@ bool AProceduralZombie::HasPart(ELimbPart Part) const
     return false;
 }
 
+float AProceduralZombie::DistanceToPart(int32 Index, const FVector& Location) const
+{
+    const FLimbPartRuntime& S = PartState[Index];
+    if (!S.HitZone) return BIG_NUMBER;
+
+    const FTransform& T = S.HitZone->GetComponentTransform();
+    const float Radius = S.HitZone->GetScaledCapsuleRadius();
+    const float Half = S.HitZone->GetScaledCapsuleHalfHeight() - Radius;
+    const FVector Up = T.GetUnitAxis(EAxis::Z);
+    return FMath::PointDistToSegment(Location, T.GetLocation() - Up * Half, T.GetLocation() + Up * Half) - Radius;
+}
+
 int32 AProceduralZombie::FindHitPart(const FVector& HitLocation) const
 {
     int32 Best = INDEX_NONE;
     float BestDist = PartHitTolerance;
-
     for (int32 i = 0; i < PartState.Num(); ++i)
     {
-        const FLimbPartRuntime& S = PartState[i];
-        if (!S.bAttached || !S.HitZone) continue;
-
-        // Distance from the hit to the capsule's surface.
-        const FTransform& T = S.HitZone->GetComponentTransform();
-        const float Half = S.HitZone->GetScaledCapsuleHalfHeight() - S.HitZone->GetScaledCapsuleRadius();
-        const FVector Up = T.GetUnitAxis(EAxis::Z);
-        const FVector A = T.GetLocation() - Up * Half;
-        const FVector B = T.GetLocation() + Up * Half;
-        const float D = FMath::PointDistToSegment(HitLocation, A, B) - S.HitZone->GetScaledCapsuleRadius();
-
+        if (!PartState[i].bAttached) continue;
+        const float D = DistanceToPart(i, HitLocation);
         if (D < BestDist)
         {
             BestDist = D;
@@ -257,6 +259,47 @@ int32 AProceduralZombie::FindHitPart(const FVector& HitLocation) const
         }
     }
     return Best;
+}
+
+void AProceduralZombie::TakeAreaDamage(float Damage, FVector Origin, float InnerRadius, float OuterRadius)
+{
+    // Every attached part in range takes its own falloff damage; the body takes
+    // damage once, from the closest part. Parts are snapshotted first because
+    // severing one detaches its children.
+    float Closest = BIG_NUMBER;
+    TArray<TPair<int32, float>> InRange;
+    for (int32 i = 0; i < PartState.Num(); ++i)
+    {
+        if (!PartState[i].bAttached) continue;
+        const float D = FMath::Max(DistanceToPart(i, Origin), 0.f);
+        Closest = FMath::Min(Closest, D);
+        const float Scale = AreaFalloff(D, InnerRadius, OuterRadius);
+        if (Scale > 0.f) InRange.Emplace(i, Scale);
+    }
+    if (InRange.Num() == 0) return;
+
+    int32 Severed = 0;
+    bool bLostHead = false;
+    for (const TPair<int32, float>& Hit : InRange)
+    {
+        FLimbPartRuntime& State = PartState[Hit.Key];
+        if (!State.bAttached) continue;   // already taken with a severed parent
+        State.Health -= Damage * Hit.Value;
+        if (State.Health <= 0.f && Parts[Hit.Key].bSeverable)
+        {
+            bLostHead |= Parts[Hit.Key].Part == ELimbPart::Head;
+            SeverPart(Hit.Key, Origin);
+            ++Severed;
+        }
+    }
+
+    UE_LOG(LogTemp, Warning, TEXT("[TM] %s: area damage %.0f hit %d part(s), severed %d"),
+        *GetName(), Damage, InRange.Num(), Severed);
+
+    if (!bIsAlive) return;
+    const float BodyDamage = Damage * AreaFalloff(Closest, InnerRadius, OuterRadius);
+    // Body damage directly (skip our nearest-part logic, the parts are already done).
+    ABaseEnemy::TakePoolDamage(bLostHead ? FMath::Max(BodyDamage, Health) : BodyDamage, Origin);
 }
 
 void AProceduralZombie::TakePoolDamage(float DamageAmount, FVector HitLocation)

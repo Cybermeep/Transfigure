@@ -42,6 +42,16 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Enemy|Combat")
     virtual void TakePoolDamage(float DamageAmount, FVector HitLocation);
 
+    /**
+     * Explosion-style damage. Full damage within InnerRadius of Origin, falling to half at
+     * OuterRadius, none beyond. Base enemies use their distance; procedural zombies damage
+     * every body part in range (so blasts can take several limbs at once).
+     */
+    virtual void TakeAreaDamage(float Damage, FVector Origin, float InnerRadius, float OuterRadius);
+
+    /** Falloff used by TakeAreaDamage: 1 inside Inner, 0.5 at Outer, 0 beyond. */
+    static float AreaFalloff(float Distance, float InnerRadius, float OuterRadius);
+
     /** Engine damage (ApplyDamage / ApplyRadialDamage / ApplyPointDamage) is routed into TakePoolDamage. */
     virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent,
         AController* EventInstigator, AActor* DamageCauser) override;

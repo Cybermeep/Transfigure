@@ -7,6 +7,7 @@
 #include "Enemy/BaseEnemy.h"
 #include "Engine/OverlapResult.h"
 #include "DrawDebugHelpers.h"
+#include "Transfigure.h"
 #include "Components/DecalComponent.h"
 #include "Particles/ParticleSystemComponent.h"
 
@@ -35,7 +36,8 @@ void UFireBlastEffect::Execute(
 
     TArray<FOverlapResult> Overlaps;
     FCollisionQueryParams Params(SCENE_QUERY_STAT(FireBlast), false, Instigator);
-    World->OverlapMultiByChannel(Overlaps, Origin, FQuat::Identity, ECC_Pawn,
+    // Weapon channel: finds enemy capsules and zombie hit zones, including on corpses.
+    World->OverlapMultiByChannel(Overlaps, Origin, FQuat::Identity, ECC_Weapon,
         FCollisionShape::MakeSphere(Outer), Params);
 
     TSet<ABaseEnemy*> Hit;
@@ -45,9 +47,8 @@ void UFireBlastEffect::Execute(
         if (!Enemy || Hit.Contains(Enemy)) continue;
         Hit.Add(Enemy);   // corpses included: they can still lose limbs
 
-        const float Dist = FVector::Dist(Origin, Enemy->GetActorLocation());
-        const float Scale = FMath::GetMappedRangeValueClamped(FVector2D(Inner, Outer), FVector2D(1.f, 0.5f), Dist);
-        Enemy->TakePoolDamage(ScaledDamage * Scale, Origin);
+        // Zombies spread this over every body part in range.
+        Enemy->TakeAreaDamage(ScaledDamage, Origin, Inner, Outer);
     }
 
 #if !UE_BUILD_SHIPPING
