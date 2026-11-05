@@ -25,6 +25,12 @@ ABaseEnemy::ABaseEnemy()
     AutoPossessAI = EAutoPossessAI::PlacedInWorldOrSpawned;
     bUseControllerRotationYaw = false;
     GetCharacterMovement()->bOrientRotationToMovement = true;
+    // Path following drives acceleration (not raw velocity), so animation BPs that check
+    // acceleration (like the Mannequin's ABP_Unarmed) play the walk cycle.
+    if (FNavMovementProperties* NavProps = GetCharacterMovement()->GetNavMovementProperties())
+    {
+        NavProps->bUseAccelerationForPaths = true;
+    }
 }
 
 void ABaseEnemy::BeginPlay()

@@ -6,6 +6,7 @@
 #include "PhysicsEngine/BodyInstance.h"
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "PhysicsEngine/BodySetup.h"
+#include "PhysicsEngine/SkeletalBodySetup.h"
 #include "ProceduralMeshComponent.h"
 #include "RingFrameUtils.h"
 #include "RingWorldGeometry.h"
@@ -51,17 +52,28 @@ void ASeveredBodyPart::Init(USkeletalMesh* InMesh, const TArray<UMaterialInterfa
     // Physics: only the severed subtree simulates. The rest of the (hidden) skeleton keeps
     // its bodies kinematic and collision-free, so it can't snag the falling limb.
     Mesh->SetEnableGravity(false);              // ring gravity in Tick
-    Mesh->RecreatePhysicsState();
+    // SetSkeletalMesh already built the physics bodies. (Forcing a recreate here and then
+    // walking Mesh->Bodies read freed bodies and crashed the editor.)
+    if (!Mesh->IsPhysicsStateCreated())
+    {
+        Mesh->RecreatePhysicsState();
+    }
+    UPhysicsAsset* PhysAsset = Mesh->GetPhysicsAsset();
+    if (!PhysAsset || BoneIdx == INDEX_NONE)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[TM] SeveredBodyPart: no physics asset or bone %s - limb won't simulate"), *CutBone.ToString());
+        return;
+    }
     TSet<int32> Subtree;
     for (int32 B = 0; B < RefSkel.GetNum(); ++B)
     {
         if (B == BoneIdx || RefSkel.BoneIsChildOf(B, BoneIdx)) Subtree.Add(B);
     }
-    for (FBodyInstance* Body : Mesh->Bodies)
+    // Look bodies up by bone name through the physics asset (safe), not the raw array.
+    for (const USkeletalBodySetup* Setup : PhysAsset->SkeletalBodySetups)
     {
-        if (!Body || !Body->BodySetup.IsValid()) continue;
-        const int32 B = RefSkel.FindBoneIndex(Body->BodySetup->BoneName);
-        if (!Subtree.Contains(B))
+        if (!Setup || Subtree.Contains(RefSkel.FindBoneIndex(Setup->BoneName))) continue;
+        if (FBodyInstance* Body = Mesh->GetBodyInstance(Setup->BoneName))
         {
             Body->SetCollisionEnabled(ECollisionEnabled::NoCollision);
         }
