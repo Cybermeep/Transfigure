@@ -7,12 +7,13 @@
 #include "States/TMState_Jump.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Destruction/DestructionManager.h"
+#include "Grapple/GrappleComponent.h"
 #include "RingFrameUtils.h"
 
 // ── BUG 6 FIX: Static DetectWall — no instance required ──
 // Takes the character explicitly so CanEnter() can call it without
 // constructing a throwaway TMState_WallRun object.
-bool TMState_WallRun::DetectWall(ATMCharacter* Char, FVector& OutNormal, bool& OutOnLeft)
+bool TMState_WallRun::DetectWall(ATMCharacter* Char, FVector& OutNormal, bool& OutOnLeft, FVector* OutPoint)
 {
     UWorld* World = Char->GetWorld();
     FHitResult Hit;
@@ -28,6 +29,7 @@ bool TMState_WallRun::DetectWall(ATMCharacter* Char, FVector& OutNormal, bool& O
     {
         OutNormal = Hit.ImpactNormal;
         OutOnLeft = false;
+        if (OutPoint) *OutPoint = Hit.ImpactPoint;
         return true;
     }
 
@@ -37,6 +39,7 @@ bool TMState_WallRun::DetectWall(ATMCharacter* Char, FVector& OutNormal, bool& O
     {
         OutNormal = Hit.ImpactNormal;
         OutOnLeft = true;
+        if (OutPoint) *OutPoint = Hit.ImpactPoint;
         return true;
     }
 
@@ -68,6 +71,8 @@ void TMState_WallRun::Enter()
     // Use static DetectWall with Owner
     DetectWall(Owner, WallNormal, bWallOnLeft);
     Owner->WallRunSide = bWallOnLeft ? -1.f : 1.f;   // camera tilt
+    Owner->WallRunNormal = WallNormal;
+    MissTime = 0.f;
     JumpsAtEntry = Owner->JumpsRemaining;
 
     auto* CMC = Owner->GetCharacterMovement();
@@ -89,16 +94,29 @@ void TMState_WallRun::Tick(float DeltaTime)
     FVector NewNormal;
     bool bLeft;
 
+    UGrappleComponent* Grapple = Owner->GrappleComponent;
+    const bool bGlued = Grapple && Grapple->IsGluedToWall();
+
     // If no wall is detected this frame, fall into air state
-    if (!DetectWall(Owner, NewNormal, bLeft))
+    FVector HitPoint;
+    if (!DetectWall(Owner, NewNormal, bLeft, &HitPoint))
     {
+        // Glued: ride out a seam for a moment; if the wall really ended, whip round its end.
+        MissTime += DeltaTime;
+        if (bGlued && MissTime < 0.03f) return;
+        if (bGlued && !LastRunDir.IsNearlyZero()) Grapple->OnGluedWallEnded(LastWallPoint, WallNormal, LastRunDir, RunSpeed);
         Owner->TransitionTo<TMState_Fall>();
         return;
     }
+    MissTime = 0.f;
+    LastWallPoint = HitPoint;
 
     WallNormal = NewNormal;
     bWallOnLeft = bLeft;
     Owner->WallRunSide = bWallOnLeft ? -1.f : 1.f;
+    Owner->WallRunNormal = WallNormal;
+    // Glued to the wall by a held grapple: no sinking at all.
+    Owner->GetCharacterMovement()->GravityScale = bGlued ? 0.f : Owner->WallRunGravityScale;
 
     // Player consumed their wall jump — transition to wall jump state
     if (Owner->JumpsRemaining < 1)
@@ -124,8 +142,43 @@ void TMState_WallRun::Tick(float DeltaTime)
             FVector::VectorPlaneProject(Owner->GetActorForwardVector(), WallNormal), Up).GetSafeNormal();
     }
 
+    // Speed added from outside (grapple boosts) is kept.
+    RunSpeed = FMath::Max(RunSpeed, FVector::VectorPlaneProject(URingFrameUtils::StripVertical(CMC->Velocity, Up), WallNormal).Size());
     // Build speed the longer the run lasts. Arrival speed above the cap is kept, not cut.
     RunSpeed = FMath::Max(RunSpeed, FMath::Min(RunSpeed + Owner->WallRunAcceleration * DeltaTime, Owner->WallRunMaxSpeed));
+    LastRunDir = WallForward;
+
+    if (bGlued)
+    {
+        // Anchor still ahead on the wall: it pulls you along toward it.
+        const FVector ToAnchor = Grapple->GetAnchorPoint() - Owner->GetActorLocation();
+        if (FVector::DotProduct(ToAnchor, WallForward) > 50.f)
+        {
+            RunSpeed = FMath::Min(RunSpeed + Grapple->GluedPullAcceleration * DeltaTime, FMath::Max(RunSpeed, Grapple->MaxMomentumSpeed));
+        }
+
+        // Holding Tab + S on the wall: dig in and charge a slingshot.
+        const FVector Input = FVector::VectorPlaneProject(Owner->GetLastMovementInputVector(), Up);
+        const FVector Facing = URingFrameUtils::StripVertical(Owner->GetActorForwardVector(), Up).GetSafeNormal();
+        if (FVector::DotProduct(Input.GetClampedToMaxSize(1.f), Facing) < -0.5f)
+        {
+            Grapple->StartSurfaceCharge();
+            Owner->TransitionTo<TMState_Fall>();
+            return;
+        }
+        // A wall straight ahead (inside corner): snap round onto it instead of hitting it.
+        const FVector Pos = Owner->GetActorLocation();
+        const float Look = FMath::Max(150.f, RunSpeed * Grapple->GluedLookAheadTime);
+        FHitResult Ahead;
+        FCollisionQueryParams Params(SCENE_QUERY_STAT(TMWallRunAhead), false, Owner);
+        if (Owner->GetWorld()->LineTraceSingleByChannel(Ahead, Pos, Pos + WallForward * Look, ECC_WorldStatic, Params)
+            && FVector::DotProduct(Ahead.ImpactNormal, WallForward) < -0.7f)
+        {
+            Grapple->OnGluedWallAhead(Ahead.ImpactPoint, Ahead.ImpactNormal, WallForward, RunSpeed, WallNormal);
+            Owner->TransitionTo<TMState_Fall>();
+            return;
+        }
+    }
     CMC->Velocity = WallForward * RunSpeed;
 }
 

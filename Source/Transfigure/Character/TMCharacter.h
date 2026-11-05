@@ -47,7 +47,7 @@ public:
 
     /** Wall runs speed up the longer they last (cm/s per second). Rewards keeping momentum. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|WallRun")
-    float WallRunAcceleration = 450.f;
+    float WallRunAcceleration = 700.f;
 
     /** Wall run speed cap. Arriving faster than this (e.g. a wall grapple) keeps the arrival speed. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|WallRun")
@@ -76,15 +76,15 @@ public:
 
     /** Speed (cm/s) where the view starts widening. Walking is 600. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Camera")
-    float SpeedFOVStartSpeed = 800.f;
+    float SpeedFOVStartSpeed = 700.f;
 
     /** Speed (cm/s) where the extra FOV is fully applied. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Camera")
-    float SpeedFOVFullSpeed = 2400.f;
+    float SpeedFOVFullSpeed = 2600.f;
 
     /** Extra FOV at full speed, in degrees (the "zoom out" at speed). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Camera")
-    float SpeedFOVBoost = 12.f;
+    float SpeedFOVBoost = 20.f;
 
     /** How fast the FOV follows speed changes. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Camera")
@@ -92,6 +92,19 @@ public:
 
     /** Set by the wall-run state: -1 wall on the left, +1 on the right, 0 when not wall running. */
     float WallRunSide = 0.f;
+    /** Set by the wall-run state: the wall's normal. */
+    FVector WallRunNormal = FVector::ZeroVector;
+
+    /** Keep the wall-run tilt this long (s) after leaving the wall in the air, so quick hops don't snap it. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Camera")
+    float WallRunTiltGrace = 0.4f;
+
+    /** Quick FOV punch (degrees) that fades out, e.g. on a grapple boost. */
+    void AddFOVKick(float Degrees) { FOVKick += Degrees; }
+    /** Seconds since you were last wall running (0 while you are). */
+    float GetTimeSinceWallRun() const { return TimeSinceWallRun; }
+    /** Narrow the view by this much this frame (e.g. slingshot tension). Set every frame it applies. */
+    void SetFOVTension(float Degrees) { FOVTension = Degrees; }
 
     // ── MOMENTUM ──
     /** On the ground faster than walk/sprint speed (after a grapple, wall run, slam...), you coast
@@ -104,23 +117,29 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|CeilingRun", meta = (ClampMin = "0.0", ClampMax = "1.0"))
     float CeilingRunSpeedAlpha = 0.95f;
 
-    /** Seconds on the ceiling per 1000 cm/s of speed you arrived with. */
+    /** Run momentum lost per second on the ceiling (cm/s^2). Mag boots keep you up there regardless. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|CeilingRun")
-    float CeilingRunTimePer1000Speed = 0.8f;
+    float CeilingRunDeceleration = 500.f;
 
+    /** Run momentum never goes above this (cm/s). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|CeilingRun")
-    float CeilingRunMinTime = 0.6f;
+    float CeilingRunMaxMomentum = 4500.f;
 
+    /** Walking speed on the ceiling with WASD (cm/s). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|CeilingRun")
-    float CeilingRunMaxTime = 3.0f;
+    float CeilingWalkSpeed = 550.f;
 
-    /** Speed lost per second on the ceiling (cm/s^2). */
+    /** Jump on the ceiling: hop away from it at this speed (the boots pull you back). Jump again mid-hop to drop. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|CeilingRun")
-    float CeilingRunDeceleration = 600.f;
+    float CeilingHopSpeed = 450.f;
 
-    /** Drop off the ceiling below this speed. */
+    /** Jump on the ceiling: momentum added to the run. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|CeilingRun")
-    float CeilingRunMinSpeed = 500.f;
+    float CeilingHopBoost = 500.f;
+
+    /** How hard the mag boots pull you back during a hop (cm/s^2). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|CeilingRun")
+    float CeilingMagPull = 1800.f;
 
     /** After dropping, no new ceiling run for this long (stops the view flipping back and forth). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement|CeilingRun")
@@ -156,6 +175,9 @@ public:
     /** Filled in by the grapple right before it starts a ceiling run. */
     FVector CeilingRunNormal = FVector::DownVector;
     float CeilingRunEntrySpeed = 0.f;
+    /** Momentum queued for the ceiling run (Tab taps), and a jump press for it to handle. */
+    float CeilingRunBoost = 0.f;
+    bool bCeilingJumpRequested = false;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Movement")
     float WallJumpLateralBoost = 500.f;
@@ -641,6 +663,10 @@ private:
 
     bool bSurfaceUpOverride = false;
     bool bOverspeedBraking = false;
+    float FOVKick = 0.f;
+    float FOVTension = 0.f;
+    float LastWallRunSide = 0.f;
+    float TimeSinceWallRun = 100.f;
     float DefaultBrakingDecelerationWalking = 2048.f;
     void UpdateMomentumBraking();
     FVector SurfaceUpOverride = FVector::UpVector;

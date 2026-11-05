@@ -12,6 +12,7 @@ class AGrappleLine;
 class ATMCharacter;
 class UCombatGrappleMove;
 class ABaseEnemy;
+struct FHitResult;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnGrappleStateChanged, EGrappleState, NewState);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnGrappleLineCreated, const FGrappleLineData&, LineData);
@@ -49,6 +50,43 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Config")
     float MaxSwingTime = 3.0f;
 
+    // ── TAB INPUT: tap = boost, hold = anchor, double tap = pull (keep the 2nd tap held = stay stuck there) ──
+    /** Hold Tab at least this long (s) to anchor instead of tapping. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Input")
+    float HoldThreshold = 0.16f;
+
+    /** A second tap within this long (s) of the first is a double tap (pull). A single tap's boost waits this long. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Input")
+    float DoubleTapWindow = 0.22f;
+
+    /** Tap: speed added toward the aim point (along the wall while wall running). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Boost")
+    float TapBoostSpeed = 800.f;
+
+    /** Tap: quick field-of-view punch, in degrees. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Boost")
+    float TapBoostFOVKick = 4.f;
+
+    /** No grapple move takes you faster than this (cm/s). Stops chained pulls stacking speed forever. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel")
+    float MaxMomentumSpeed = 4500.f;
+
+    /** Hold: an anchor on a wall counts as "the wall you're running on" (glue) when the normals match this closely. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Anchor", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+    float GlueMatchDot = 0.9f;
+
+    /** Hold: longest an anchor swing lasts (s). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Anchor")
+    float AnchorMaxTime = 8.f;
+
+    /** Gravity while the rope carries a wall run round a corner (keeps you level). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Anchor")
+    float OrbitGravityScale = 0.1f;
+
+    /** Jumping off a spot you're stuck to: push away from the surface (cm/s). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Anchor")
+    float PerchJumpOffSpeed = 700.f;
+
     /** Ceilings / non-wall surfaces swing (pendulum) instead of pulling you in. Small tug toward the anchor on attach. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Swing")
     float SwingAttachTug = 250.f;
@@ -63,22 +101,54 @@ public:
 
     /** Only when you're at most this far from the wall you hit (further away = the normal yank). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|CornerSwing")
-    float CornerSwingMaxDistance = 1000.f;
+    float CornerSwingMaxDistance = 2500.f;
 
     /** How head-on you must be moving into the wall (1 = straight at it, 0.5 = within 60 degrees). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|CornerSwing", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-    float CornerSwingMinApproach = 0.5f;
+    float CornerSwingMinApproach = 0.3f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|CornerSwing")
-    float CornerSwingMinSpeed = 400.f;
+    float CornerSwingMinSpeed = 300.f;
 
     /** Speed multiplier through the turn (your momentum is kept, plus this). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|CornerSwing")
-    float CornerSwingSpeedBoost = 1.15f;
+    float CornerSwingSpeedBoost = 1.25f;
 
-    /** Tightest turn radius (cm). */
+    /** The turn onto the wall: you dash straight at it, then snap round in a curve this tight (cm). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|CornerSwing")
-    float CornerSwingMinRadius = 150.f;
+    float CornerTurnRadius = 350.f;
+
+    // ── ANCHOR CONTROLS (while holding Tab) ──
+    /** Holding the anchor with no movement keys: you're reeled in toward it (cm/s^2). W/A/D steer instead. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Anchor")
+    float AnchorYankAcceleration = 5000.f;
+
+    /** Hold + move away from the anchor (usually S): pinned in place, charging a slingshot.
+     *  Let go of S or Tab to launch toward the anchor. Seconds to full charge. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Slingshot")
+    float SlingChargeTime = 1.0f;
+
+    /** While charging, how fast your speed bleeds away (higher = stops sooner; ~10 is about a quarter second). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Slingshot")
+    float SlingBrakeRate = 10.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Slingshot")
+    float SlingMinSpeed = 1500.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Slingshot")
+    float SlingMaxSpeed = 4500.f;
+
+    /** Extra upward speed on launch. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Slingshot")
+    float SlingLift = 250.f;
+
+    /** The view narrows by up to this much while charging (tension), in degrees. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Slingshot")
+    float SlingFOVPull = 8.f;
+
+    /** FOV punch on launch at full charge, in degrees. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Slingshot")
+    float SlingLaunchFOVKick = 12.f;
 
     /** Gravity while swinging round (like a wall run, so you don't drop). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|CornerSwing")
@@ -249,6 +319,35 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Grapple")
     void ReleaseGrapple();
 
+    /** Tab pressed / released. The character passes its view trace. */
+    void OnTabPressed(const FHitResult& Hit, bool bHit);
+    void OnTabReleased();
+    /** Wall-run state, while glued: a wall straight ahead (inside corner) - snap round onto it. */
+    void OnGluedWallAhead(const FVector& Point, const FVector& Normal, const FVector& RunDir, float Speed, const FVector& OldWallNormal);
+    /** Wall-run state, while glued: the wall just ended (outside corner) - whip round its end. */
+    void OnGluedWallEnded(const FVector& LastWallPoint, const FVector& WallNormal, const FVector& RunDir, float Speed);
+    /** Holding the anchor on the ground or a glued wall + S: bleed speed, hang there charging a slingshot. */
+    void StartSurfaceCharge();
+
+    /** Glued wall run with the anchor still ahead of you: you're pulled along the wall toward it (cm/s^2). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Anchor")
+    float GluedPullAcceleration = 1500.f;
+
+    FVector GetAnchorPoint() const { return SwingAnchorPoint; }
+
+    /** Glued wall run: how far ahead (seconds of travel) to look for a wall to snap round onto. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Anchor")
+    float GluedLookAheadTime = 0.12f;
+
+    /** Whipping round the end of a wall: give up after turning this far (degrees). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Anchor")
+    float EdgeWrapMaxAngle = 200.f;
+    void JumpOffPerch();
+    bool IsGluedToWall() const { return bWallGlue; }
+    bool IsPerched() const { return bPerched; }
+    /** The rope is carrying a wall run round a corner (the camera keeps its wall-run tilt). */
+    bool IsCarryingWallRun() const { return bIsSwinging && (SwingMode == ESwingMode::CornerSwing || SwingMode == ESwingMode::EdgeWrap || bOrbit); }
+
     UFUNCTION(BlueprintCallable, Category = "Grapple")
     void CancelAiming();
 
@@ -321,8 +420,69 @@ private:
     bool bWallAnchor = false;
 
     /** What the rope does: pendulum, yank to a wall, swing round a wall, or yank to a ceiling run. */
-    enum class ESwingMode : uint8 { Swing, WallPull, CornerSwing, CeilingPull };
+    enum class ESwingMode : uint8 { Swing, WallPull, CornerSwing, CeilingPull, SurfacePull, EdgeWrap };
     ESwingMode SwingMode = ESwingMode::Swing;
+
+    enum class ETabPhase : uint8 { Idle, FirstHeld, WaitSecond, Pull, Anchor };
+    ETabPhase TabPhase = ETabPhase::Idle;
+    double FirstPressTime = 0.0;
+    double FirstReleaseTime = 0.0;
+    FVector PendingPoint = FVector::ZeroVector;
+    FVector PendingNormal = FVector::ZeroVector;
+    bool bPullHeld = false;
+    bool bWallGlue = false;
+    bool bPerched = false;
+    bool bPerchOnCeiling = false;
+    FVector PerchNormal = FVector::ZeroVector;
+    bool bOrbit = false;
+    bool bCeilingRunEligible = false;
+    bool bPressPaid = false;
+
+    // Slingshot charge.
+    bool bCharging = false;
+    float ChargeTime = 0.f;
+    /** Seconds since S was last seen while charging (input can read empty for a frame). */
+    float SlingInputGone = 0.f;
+    /** Real time movement input was last seen (so a one-frame gap doesn't count as "no keys"). */
+    double LastMoveInputTime = 0.0;
+    void Launch();
+
+    // Corner snap path: straight dash P0 -> P1, then a quadratic curve P1 -(C)-> P2 along the wall.
+    FVector CornerP0 = FVector::ZeroVector;
+    FVector CornerP1 = FVector::ZeroVector;
+    FVector CornerC = FVector::ZeroVector;
+    FVector CornerP2 = FVector::ZeroVector;
+    FVector CornerHeading = FVector::ZeroVector;
+    float CornerStraight = 0.f;
+    float CornerCurveLen = 0.f;
+    float CornerTravel = 0.f;
+    float CornerLift = 0.f;
+
+    void UpdateTabTiming();
+    bool StartBoost();
+    void StartPull(bool bChargeMana);
+    void StartAnchor();
+    void AttachRope(const FVector& Point, const FVector& InitialVelocity, float MaxTime, bool bLift = true);
+    void BeginCornerSnap(const FVector& WallPoint, const FVector& WallNormal, const FVector& Heading, const FVector& ExitDir, float Speed);
+
+    // Holding an anchor while on the ground: you keep walking until you let it reel you in (no keys) or press S.
+    bool bGroundAnchor = false;
+    void UpdateGroundAnchor();
+
+    // Whip round the end of a wall: orbit a pivot at the wall's end until another face is beside us.
+    FVector EdgePivot = FVector::ZeroVector;
+    FVector EdgeOffset = FVector::ZeroVector;      // horizontal, pivot -> player at the start
+    FVector EdgeVertical = FVector::ZeroVector;    // vertical part of pivot -> player (kept)
+    FVector EdgeStartNormal = FVector::ZeroVector;
+    float EdgeAngle = 0.f;
+    float EdgeSign = 1.f;
+    float EdgeRadius = 100.f;
+    float EdgeSpeed = 0.f;
+    void UpdateEdgeWrap(float DeltaTime);
+    void StopRope(bool bHop);
+    void BeginPerch(const FVector& SurfaceNormal, bool bCeiling);
+    void EndPerch(bool bJump);
+    FVector ClampMomentum(const FVector& V) const;
     FVector CornerExitDir = FVector::ZeroVector;
     float CornerSpeed = 0.f;
     float CeilingEntrySpeed = 0.f;
@@ -347,7 +507,7 @@ private:
     FVector SlamTargetNormal = FVector::ZeroVector;
     FVector SlamDir = FVector::ZeroVector;
     TWeakObjectPtr<AActor> SlamTargetActor;
-    void ArriveAtWall(const FVector& Up);
+    void ArriveAtWall(const FVector& Up, const FVector& WallNormal);
     void PerformEvade();
 
     void PerformGrappleSwing(FVector AnchorPoint);

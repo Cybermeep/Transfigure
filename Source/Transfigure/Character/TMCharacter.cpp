@@ -256,8 +256,22 @@ void ATMCharacter::SetupFirstPersonCamera()
 
 void ATMCharacter::UpdateCameraEffects(float DeltaTime)
 {
-    // Roll: lean away from the wall while wall running.
-    const float TargetRoll = -WallRunSide * WallRunCameraTilt;
+    // Roll: lean away from the wall while wall running. Kept for a moment after leaving the
+    // wall (and while the rope carries the run round a corner) so it doesn't snap off and on.
+    if (WallRunSide != 0.f)
+    {
+        LastWallRunSide = WallRunSide;
+        TimeSinceWallRun = 0.f;
+    }
+    else
+    {
+        TimeSinceWallRun += DeltaTime;
+    }
+    const bool bAroundCorner = GrappleComponent && GrappleComponent->IsCarryingWallRun() && TimeSinceWallRun < 3.f;
+    const bool bKeepTilt = WallRunSide == 0.f && !GetCharacterMovement()->IsMovingOnGround()
+        && (TimeSinceWallRun < WallRunTiltGrace || bAroundCorner);
+    const float Side = WallRunSide != 0.f ? WallRunSide : (bKeepTilt ? LastWallRunSide : 0.f);
+    const float TargetRoll = -Side * WallRunCameraTilt;
     CameraRoll = FMath::FInterpTo(CameraRoll, TargetRoll, DeltaTime, CameraTiltSpeed);
 
     // Ceiling flip: one smooth roll over a fixed time, never re-triggered mid-way.
@@ -275,13 +289,15 @@ void ATMCharacter::UpdateCameraEffects(float DeltaTime)
 
     // FOV: widen with ground speed so going fast feels fast.
     const float SpeedAlpha = GetSpeedFOVAlpha();
-    const float TargetFOV = (bIsTemporalActive ? TemporalCameraFOV : BaseFOV) + SpeedFOVBoost * SpeedAlpha;
+    const float TargetFOV = (bIsTemporalActive ? TemporalCameraFOV : BaseFOV) + SpeedFOVBoost * SpeedAlpha - FOVTension;
+    FOVTension = 0.f;
     // The clap snaps the view wide; leaving it (and speed changes) ease more gently.
     const float FOVSpeed = (bIsTemporalActive && TargetFOV > CurrentFOV) ? TemporalFOVChangeSpeed : FOVChangeSpeed;
     CurrentFOV = FMath::FInterpTo(CurrentFOV, TargetFOV, DeltaTime, FOVSpeed);
+    FOVKick = FMath::FInterpTo(FOVKick, 0.f, DeltaTime, 5.f);
     if (ViewCamera)
     {
-        ViewCamera->SetFieldOfView(CurrentFOV);
+        ViewCamera->SetFieldOfView(CurrentFOV + FOVKick);
     }
 }
 
@@ -318,7 +334,7 @@ void ATMCharacter::UpdateMomentumBraking()
 
 float ATMCharacter::GetSpeedFOVAlpha() const
 {
-    const float Speed = URingFrameUtils::StripVertical(GetVelocity(), CachedRingUp).Size();
+    const float Speed = URingFrameUtils::StripVertical(GetCharacterMovement()->Velocity, CachedRingUp).Size();
     return FMath::Clamp((Speed - SpeedFOVStartSpeed) / FMath::Max(SpeedFOVFullSpeed - SpeedFOVStartSpeed, 1.f), 0.f, 1.f);
 }
 
@@ -452,8 +468,17 @@ void ATMCharacter::OnJumpPressed()
         *CurrentStateName, JumpsRemaining, GetCharacterMovement()->IsMovingOnGround() ? 1 : 0);
     if (IsCeilingRunning())
     {
-        TransitionTo<TMState_Fall>();   // drop off; Exit flips the view back
+        bCeilingJumpRequested = true;   // the ceiling run decides: hop, or drop if already hopping
         return;
+    }
+    if (GrappleComponent && GrappleComponent->IsPerched())
+    {
+        GrappleComponent->JumpOffPerch();
+        return;
+    }
+    if (GrappleComponent && GrappleComponent->IsGluedToWall())
+    {
+        GrappleComponent->ReleaseGrapple();   // jumping lets go of the wall glue
     }
     if (JumpsRemaining <= 0) return;
 
@@ -601,25 +626,17 @@ bool ATMCharacter::TraceFromView(FHitResult& OutHit, float Range) const
 
 void ATMCharacter::OnGrapplePressed()
 {
-    if (IsCeilingRunning())
-    {
-        TransitionTo<TMState_Fall>();
-    }
+    // Tap = boost, hold = anchor, double tap = pull. The grapple sorts out which.
+    if (!GrappleComponent) return;
     FHitResult Hit;
-    if (GrappleComponent && TraceFromView(Hit, GrappleComponent->MaxGrappleRange))
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple pressed: hit %s"), *GetNameSafe(Hit.GetActor()));
-        GrappleComponent->FireGrapple(Hit.ImpactPoint, Cast<ABaseEnemy>(Hit.GetActor()), Hit.ImpactNormal);
-    }
-    else
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple pressed: nothing in range"));
-    }
+    const bool bHit = TraceFromView(Hit, GrappleComponent->MaxGrappleRange);
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Tab pressed: %s"), bHit ? *GetNameSafe(Hit.GetActor()) : TEXT("nothing in range"));
+    GrappleComponent->OnTabPressed(Hit, bHit);
 }
 
 void ATMCharacter::OnGrappleReleased()
 {
-    if (GrappleComponent) GrappleComponent->ReleaseGrapple();
+    if (GrappleComponent) GrappleComponent->OnTabReleased();
 }
 
 void ATMCharacter::TryCombatGrapple(ECombatGrappleMove Move)

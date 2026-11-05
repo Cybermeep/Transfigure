@@ -19,6 +19,10 @@ public:
     virtual void DrawHUD() override;
 
 private:
+    /** Light-blue screen border while you're fast enough to ceiling run. */
+    void DrawSpeedBorder(float Alpha);
+    float SpeedBorderAlpha = 0.f;
+
     void DrawSpellWheel(const class ATMCharacter* Char, const FVector2D& Center);
     void DrawCenteredText(const FString& Text, const FVector2D& Pos, const FLinearColor& Color, float Scale = 1.f);
 };

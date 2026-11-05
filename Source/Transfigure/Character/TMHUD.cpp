@@ -5,6 +5,7 @@
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
 #include "Engine/Font.h"
+#include "Misc/App.h"
 
 void ATMHUD::DrawHUD()
 {
@@ -22,6 +23,14 @@ void ATMHUD::DrawHUD()
         return;
     }
 
+    // Top speed (ceiling run ready): fade in a light-blue border.
+    const float BorderTarget = Char->CanStartCeilingRun() ? 1.f : 0.f;
+    SpeedBorderAlpha = FMath::FInterpTo(SpeedBorderAlpha, BorderTarget, FApp::GetDeltaTime(), 6.f);
+    if (SpeedBorderAlpha > 0.01f)
+    {
+        DrawSpeedBorder(SpeedBorderAlpha);
+    }
+
     // Crosshair: shots, grapples and sigils all aim along the screen centre.
     DrawRect(FLinearColor(1.f, 1.f, 1.f, 0.9f), Center.X - 2.f, Center.Y - 2.f, 4.f, 4.f);
 
@@ -29,6 +38,26 @@ void ATMHUD::DrawHUD()
     const FString Status = FString::Printf(TEXT("Spell: %s   (tap Q place, hold Q wheel)      Health %.0f / %.0f      Mana %.0f / %.0f"),
         *Char->DrawSigilSpellID.ToString(), Char->GetHealth(), Char->GetMaxHealth(), Char->CurrentMana, Char->MaxMana);
     DrawCenteredText(Status, FVector2D(Center.X, Canvas->ClipY - 40.f), FLinearColor::White);
+}
+
+void ATMHUD::DrawSpeedBorder(float Alpha)
+{
+    // Layered strips: bright at the edge, fading inward, with a slow shimmer.
+    const float W = Canvas->ClipX;
+    const float H = Canvas->ClipY;
+    const float Pulse = 0.85f + 0.15f * FMath::Sin(static_cast<float>(FApp::GetCurrentTime()) * 4.f);
+    const int32 NumLayers = 6;
+    for (int32 i = 0; i < NumLayers; ++i)
+    {
+        const float T = 3.f + i * 5.f;   // strip thickness grows inward
+        const float A = Alpha * Pulse * (0.32f - i * 0.045f);
+        if (A <= 0.f) break;
+        const FLinearColor C(0.45f, 0.85f, 1.f, A);
+        DrawRect(C, 0.f, 0.f, W, T);
+        DrawRect(C, 0.f, H - T, W, T);
+        DrawRect(C, 0.f, T, T, H - 2.f * T);
+        DrawRect(C, W - T, T, T, H - 2.f * T);
+    }
 }
 
 void ATMHUD::DrawSpellWheel(const ATMCharacter* Char, const FVector2D& Center)

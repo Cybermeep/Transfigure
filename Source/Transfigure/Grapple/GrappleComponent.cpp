@@ -9,6 +9,7 @@
 #include "DrawDebugHelpers.h"
 #include "States/TMState_WallRun.h"
 #include "States/TMState_CeilingRun.h"
+#include "States/TMState_Jump.h"
 #include "Components/CapsuleComponent.h"
 #include "Engine/OverlapResult.h"
 #include "Character/TMCharacter.h"
@@ -38,6 +39,8 @@ void UGrappleComponent::TickComponent(float DeltaTime, ELevelTick TickType,
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
     UpdateLineLifecycles(DeltaTime);
+    UpdateTabTiming();
+    UpdateGroundAnchor();
 
     if (bIsSwinging)
     {
@@ -51,7 +54,7 @@ void UGrappleComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 
 #if !UE_BUILD_SHIPPING
     // Nothing renders grapple lines yet, so draw them as debug lines.
-    if (bIsSwinging && OwnerCharacter)
+    if ((bIsSwinging || bWallGlue || bPerched || bGroundAnchor) && OwnerCharacter)
     {
         DrawDebugLine(GetWorld(), OwnerCharacter->GetActorLocation(), SwingAnchorPoint, FColor::Cyan, false, -1.f, 0, 2.f);
     }
@@ -65,18 +68,506 @@ void UGrappleComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 #endif
 }
 
-// ── SWING PHYSICS (Verlet constraint) ──────────────────────────────────────
-//
-// How it works:
-//   1. Apply gravity to SwingVelocity each frame.
-//   2. Move the character by SwingVelocity * DeltaTime.
-//   3. Measure how far the new position is from the anchor point.
-//   4. If distance > rope length, project the character back onto the sphere
-//      surface and strip the outward component from velocity (constraint).
-//
-// This gives natural pendulum arcs without needing a full physics joint.
-// MomentumConservation (0–1) controls how much velocity survives each frame.
-// ───────────────────────────────────────────────────────────────────────────
+// ── TAB INPUT ──────────────────────────────────────────────────────────────
+//   tap                  -> boost toward where you aimed (fires after the double-tap window)
+//   hold                 -> anchor: glue to the wall you run on / swing round a corner / pendulum
+//   double tap           -> pull to the point (wall: wall run, ceiling at full speed: ceiling run)
+//   double tap, keep held-> pull, then stay stuck to that spot until you let go
+// Timing uses real time so the temporal clap (slowed world) doesn't stretch the windows.
+
+static bool IsWallNormalFor(const FVector& N, const FVector& Up, float MaxTiltDegrees)
+{
+    return !N.IsNearlyZero() && FMath::Abs(FVector::DotProduct(N, Up)) <= FMath::Sin(FMath::DegreesToRadians(MaxTiltDegrees));
+}
+
+FVector UGrappleComponent::ClampMomentum(const FVector& V) const
+{
+    // Cap the speed along the ground; falls keep their own (sanely bounded) speed.
+    const FVector Up = OwnerCharacter ? URingFrameUtils::GetUpFor(OwnerCharacter) : FVector::UpVector;
+    const float Vert = FVector::DotProduct(V, Up);
+    return (V - Up * Vert).GetClampedToMaxSize(MaxMomentumSpeed) + Up * FMath::Clamp(Vert, -MaxMomentumSpeed, MaxMomentumSpeed);
+}
+
+void UGrappleComponent::OnTabPressed(const FHitResult& Hit, bool bHit)
+{
+    if (!OwnerCharacter) return;
+    const double Now = GetWorld()->GetRealTimeSeconds();
+
+    // Second press inside the window: pull. Keep holding it to stay stuck where you land.
+    if (TabPhase == ETabPhase::WaitSecond && Now - FirstReleaseTime <= DoubleTapWindow)
+    {
+        if (bHit)
+        {
+            PendingPoint = Hit.ImpactPoint;
+            PendingNormal = Hit.ImpactNormal;
+        }
+        bPullHeld = true;
+        TabPhase = ETabPhase::Pull;
+        StartPull(false);   // the first tap paid
+        return;
+    }
+    if (TabPhase != ETabPhase::Idle || bIsSwinging || bPerched || bWallGlue) return;
+    if (!bHit) return;
+
+    // A living enemy in range: combat grapple straight away.
+    ABaseEnemy* Enemy = Cast<ABaseEnemy>(Hit.GetActor());
+    if (Enemy && Enemy->IsAlive() && IsEnemyGrappleable(Enemy))
+    {
+        FireGrapple(Hit.ImpactPoint, Enemy, Hit.ImpactNormal);
+        return;
+    }
+
+    PendingPoint = Hit.ImpactPoint;
+    PendingNormal = Hit.ImpactNormal;
+    FirstPressTime = Now;
+    // Instant tug: a hold or double tap builds on it.
+    bPressPaid = StartBoost();
+    TabPhase = bPressPaid ? ETabPhase::FirstHeld : ETabPhase::Idle;
+}
+
+void UGrappleComponent::OnTabReleased()
+{
+    switch (TabPhase)
+    {
+    case ETabPhase::FirstHeld:
+        // Quick tap: wait a moment in case it's a double tap.
+        FirstReleaseTime = GetWorld()->GetRealTimeSeconds();
+        TabPhase = ETabPhase::WaitSecond;
+        break;
+    case ETabPhase::Anchor:
+        if (bCharging) Launch();   // let go while charging: slingshot
+        else ReleaseGrapple();
+        break;
+    case ETabPhase::Pull:
+        bPullHeld = false;
+        if (bPerched) ReleaseGrapple();   // was stuck to the spot: let go
+        break;
+    default:
+        break;
+    }
+}
+
+void UGrappleComponent::UpdateTabTiming()
+{
+    const double Now = GetWorld()->GetRealTimeSeconds();
+    if (TabPhase == ETabPhase::FirstHeld && Now - FirstPressTime >= HoldThreshold)
+    {
+        TabPhase = ETabPhase::Anchor;
+        StartAnchor();
+    }
+    else if (TabPhase == ETabPhase::WaitSecond && Now - FirstReleaseTime > DoubleTapWindow)
+    {
+        TabPhase = ETabPhase::Idle;   // it was a single tap (its boost already happened)
+    }
+
+    // The glued wall run ended some other way (wall jump, landed...): nothing left to hold.
+    if (bWallGlue && OwnerCharacter && !OwnerCharacter->IsWallRunning())
+    {
+        bWallGlue = false;
+        if (TabPhase == ETabPhase::Anchor && !bIsSwinging) TabPhase = ETabPhase::Idle;
+    }
+}
+
+// Tap: a quick connected tug that adds momentum toward the aim point.
+bool UGrappleComponent::StartBoost()
+{
+    if (!OwnerCharacter) return false;
+    if (!OwnerCharacter->ConsumeMana(SwingManaCost))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[TM] Not enough mana for grapple"));
+        return false;
+    }
+    auto* CMC = OwnerCharacter->GetCharacterMovement();
+    const FVector Up = URingFrameUtils::GetUpFor(OwnerCharacter);
+    const FVector Pos = OwnerCharacter->GetActorLocation();
+    FVector Add = (PendingPoint - Pos).GetSafeNormal() * TapBoostSpeed;
+
+    const TCHAR* Where = TEXT("air");
+    if (OwnerCharacter->IsWallRunning())
+    {
+        // Along the wall only, so you stay on it (and keep the tilt).
+        Add = FVector::VectorPlaneProject(URingFrameUtils::StripVertical(Add, Up), OwnerCharacter->WallRunNormal);
+        Where = TEXT("wall run");
+    }
+    else if (OwnerCharacter->IsCeilingRunning())
+    {
+        OwnerCharacter->CeilingRunBoost += TapBoostSpeed;   // the ceiling run adds it to its momentum
+        Add = FVector::ZeroVector;
+        Where = TEXT("ceiling run");
+    }
+    else if (CMC->IsMovingOnGround())
+    {
+        Add = URingFrameUtils::StripVertical(Add, Up);
+        Where = TEXT("ground");
+    }
+    CMC->Velocity = ClampMomentum(CMC->Velocity + Add);
+    OwnerCharacter->AddFOVKick(TapBoostFOVKick);
+
+#if !UE_BUILD_SHIPPING
+    DrawDebugLine(GetWorld(), Pos, PendingPoint, FColor::Cyan, false, 0.15f, 0, 2.f);
+#endif
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: BOOST (%s) +%.0f -> %.0f cm/s"), Where, Add.Size(), CMC->Velocity.Size());
+    return true;
+}
+
+// Double tap: the snappy yank to the point.
+void UGrappleComponent::StartPull(bool bChargeMana)
+{
+    if (!OwnerCharacter) return;
+    if (bChargeMana && !OwnerCharacter->ConsumeMana(SwingManaCost))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[TM] Not enough mana for grapple pull"));
+        TabPhase = ETabPhase::Idle;
+        return;
+    }
+    if (OwnerCharacter->IsCeilingRunning()) OwnerCharacter->TransitionTo<TMState_Fall>();
+    bWallGlue = false;
+
+    auto* CMC = OwnerCharacter->GetCharacterMovement();
+    const FVector Up = URingFrameUtils::GetUpFor(OwnerCharacter);
+    const FVector Pos = OwnerCharacter->GetActorLocation();
+    const FVector PreVelocity = CMC->Velocity;
+    const FVector Vh = URingFrameUtils::StripVertical(PreVelocity, Up);
+    AnchorNormal = PendingNormal.GetSafeNormal();
+
+    bOrbit = false;
+    bCeilingRunEligible = false;
+    if (IsWallNormalFor(AnchorNormal, Up, WallMaxTiltDegrees))
+    {
+        SwingMode = ESwingMode::WallPull;
+    }
+    else if (!AnchorNormal.IsNearlyZero() && FVector::DotProduct(AnchorNormal, -Up) >= CeilingMinDownDot)
+    {
+        SwingMode = ESwingMode::CeilingPull;
+        bCeilingRunEligible = OwnerCharacter->CanStartCeilingRun();
+        CeilingEntrySpeed = Vh.Size();
+    }
+    else
+    {
+        SwingMode = ESwingMode::SurfacePull;
+    }
+    bWallAnchor = (SwingMode == ESwingMode::WallPull);
+
+    // Snappy yank, but chained pulls can't stack speed forever: never faster than
+    // your current speed or the pull speed, whichever is higher (and the cap).
+    FVector V = PreVelocity * MomentumConservation + (PendingPoint - Pos).GetSafeNormal() * WallPullSpeed;
+    V = ClampMomentum(V.GetClampedToMaxSize(FMath::Max(WallPullSpeed, PreVelocity.Size())));
+    AttachRope(PendingPoint, V, MaxSwingTime);
+}
+
+// Hold: the point becomes an anchor.
+void UGrappleComponent::StartAnchor()
+{
+    if (!OwnerCharacter) return;
+    if (OwnerCharacter->IsCeilingRunning()) OwnerCharacter->TransitionTo<TMState_Fall>();
+    bCharging = false;
+
+    auto* CMC = OwnerCharacter->GetCharacterMovement();
+    const FVector Up = URingFrameUtils::GetUpFor(OwnerCharacter);
+    const FVector Pos = OwnerCharacter->GetActorLocation();
+    const FVector PreVelocity = CMC->Velocity;
+    const FVector Vh = URingFrameUtils::StripVertical(PreVelocity, Up);
+    AnchorNormal = PendingNormal.GetSafeNormal();
+    const bool bWall = IsWallNormalFor(AnchorNormal, Up, WallMaxTiltDegrees);
+    const bool bFromWallRun = OwnerCharacter->IsWallRunning();
+    bWallAnchor = bWall;
+    bOrbit = false;
+
+    // a) Anchored on the wall you're running on: glued to it. Momentum kept, no falling off;
+    //    a wall ahead or the end of the wall is handled by the wall run (OnGluedWallAhead / OnGluedWallEnded).
+    if (bWall && bFromWallRun && FVector::DotProduct(OwnerCharacter->WallRunNormal, AnchorNormal) > GlueMatchDot)
+    {
+        SwingAnchorPoint = PendingPoint;
+        bWallGlue = true;
+        UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: ANCHOR - glued to the wall run at %.0f cm/s"), Vh.Size());
+        return;
+    }
+
+    // b) Running into the wall you anchored on: snap round onto it, keeping the speed.
+    if (bWall && bEnableCornerSwing)
+    {
+        const float DistToWall = FVector::DotProduct(Pos - PendingPoint, AnchorNormal);
+        const float Approach = Vh.IsNearlyZero() ? 0.f : FVector::DotProduct(Vh.GetSafeNormal(), -AnchorNormal);
+        if (DistToWall <= CornerSwingMaxDistance && DistToWall > WallArrivalDistance
+            && Vh.Size() >= CornerSwingMinSpeed && Approach >= CornerSwingMinApproach)
+        {
+            // Turn toward the side you aimed at (else the way you're drifting, else your right).
+            const FVector Along = FVector::CrossProduct(Up, AnchorNormal).GetSafeNormal();
+            const float Lateral = FVector::DotProduct(PendingPoint - Pos, Along);
+            const float Drift = FVector::DotProduct(Vh, Along);
+            const float Side = FMath::Abs(Lateral) > 30.f ? Lateral
+                : (FMath::Abs(Drift) > 50.f ? Drift : FVector::DotProduct(OwnerCharacter->GetActorRightVector(), Along));
+            BeginCornerSnap(PendingPoint, AnchorNormal, Vh.GetSafeNormal(), Along * (Side >= 0.f ? 1.f : -1.f),
+                FMath::Max(Vh.Size(), OwnerCharacter->WallRunSpeed) * CornerSwingSpeedBoost);
+            return;
+        }
+    }
+
+    // On the ground: the anchor's placed but you keep walking. No keys reels you in,
+    // S charges a slingshot (UpdateGroundAnchor).
+    if (CMC->IsMovingOnGround())
+    {
+        SwingAnchorPoint = PendingPoint;
+        bGroundAnchor = true;
+        LastMoveInputTime = GetWorld()->GetRealTimeSeconds();
+        UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: ANCHOR placed (on the ground)"));
+        return;
+    }
+
+    // c) Everything else: a pendulum. Started from a wall run it stays level (an orbit),
+    //    which is what carries you round an outside corner.
+    SwingMode = ESwingMode::Swing;
+    bOrbit = bFromWallRun || OwnerCharacter->GetTimeSinceWallRun() < 0.6f;
+    const FVector V = PreVelocity * MomentumConservation + (PendingPoint - Pos).GetSafeNormal() * (bOrbit ? 0.f : SwingAttachTug);
+    AttachRope(PendingPoint, ClampMomentum(V), AnchorMaxTime);
+}
+
+void UGrappleComponent::BeginCornerSnap(const FVector& WallPoint, const FVector& WallNormal, const FVector& Heading,
+    const FVector& ExitDir, float Speed)
+{
+    AnchorNormal = WallNormal;
+    bWallAnchor = true;
+    bOrbit = false;
+    SwingMode = ESwingMode::CornerSwing;
+    CornerExitDir = ExitDir;
+    CornerSpeed = FMath::Min(Speed, MaxMomentumSpeed);
+    AttachRope(WallPoint, Heading * CornerSpeed, AnchorMaxTime);
+
+    // Path, from where we are now (AttachRope may have lifted us off the floor):
+    // dash along our heading to the wall-run line, snapping round the last bit of it.
+    const float Approach = FMath::Max(FVector::DotProduct(Heading, -WallNormal), 0.1f);
+    CornerP0 = OwnerCharacter->GetActorLocation();
+    const float LineDist = WallArrivalDistance * 0.8f;
+    const float ToLine = FMath::Max(FVector::DotProduct(CornerP0 - WallPoint, WallNormal) - LineDist, 1.f) / Approach;
+    const float R = FMath::Min(ToLine * 0.5f, CornerTurnRadius);
+    CornerHeading = Heading;
+    CornerC = CornerP0 + Heading * ToLine;
+    CornerP1 = CornerC - Heading * R;
+    CornerP2 = CornerC + CornerExitDir * R;
+    CornerStraight = ToLine - R;
+    CornerCurveLen = 0.f;
+    FVector Prev = CornerP1;
+    for (int32 i = 1; i <= 8; ++i)
+    {
+        const float U = i / 8.f;
+        const FVector P = (1.f - U) * (1.f - U) * CornerP1 + 2.f * (1.f - U) * U * CornerC + U * U * CornerP2;
+        CornerCurveLen += FVector::Dist(P, Prev);
+        Prev = P;
+    }
+    CornerTravel = 0.f;
+    CornerLift = 0.f;
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: corner snap - %.0f cm dash, %.0f cm turn at %.0f cm/s"),
+        CornerStraight, CornerCurveLen, CornerSpeed);
+}
+
+void UGrappleComponent::OnGluedWallAhead(const FVector& Point, const FVector& Normal, const FVector& RunDir, float Speed,
+    const FVector& OldWallNormal)
+{
+    if (!bWallGlue || !OwnerCharacter) return;
+    bWallGlue = false;
+    const FVector Up = URingFrameUtils::GetUpFor(OwnerCharacter);
+    // Turn away from the wall we were on, along the one ahead.
+    FVector Exit = URingFrameUtils::StripVertical(FVector::VectorPlaneProject(OldWallNormal, Normal), Up).GetSafeNormal();
+    if (Exit.IsNearlyZero()) Exit = FVector::CrossProduct(Up, Normal).GetSafeNormal();
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: glued run - wall ahead, snapping round onto it"));
+    BeginCornerSnap(Point, Normal, RunDir, Exit, Speed);
+}
+
+void UGrappleComponent::OnGluedWallEnded(const FVector& LastWallPoint, const FVector& WallNormal, const FVector& RunDir, float Speed)
+{
+    if (!bWallGlue || !OwnerCharacter) return;
+    bWallGlue = false;
+    const FVector Up = URingFrameUtils::GetUpFor(OwnerCharacter);
+    const FVector Pos = OwnerCharacter->GetActorLocation();
+    const FVector N = WallNormal.GetSafeNormal();
+
+    // A thin wall has a back face close behind: pivot on its middle and wrap 180 onto the back.
+    // Otherwise (a building corner) pivot on the edge and wrap 90 onto the end face.
+    const FVector Probe = LastWallPoint - RunDir * 15.f;
+    FHitResult Back;
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(TMEdgeWrap), false, OwnerCharacter);
+    float Half = 0.f;
+    if (GetWorld()->LineTraceSingleByChannel(Back, Probe - N * 600.f, Probe - N * 2.f, ECC_WorldStatic, Params)
+        && FVector::DotProduct(Back.ImpactNormal, -N) > 0.8f)
+    {
+        Half = FVector::DotProduct(Probe - Back.ImpactPoint, N) * 0.5f;
+    }
+    EdgePivot = LastWallPoint + RunDir * 5.f - N * Half;
+    const FVector ToPlayer = Pos - EdgePivot;
+    EdgeVertical = Up * FVector::DotProduct(ToPlayer, Up);
+    EdgeOffset = ToPlayer - EdgeVertical;
+    EdgeRadius = FMath::Max(EdgeOffset.Size(), 60.f);
+    EdgeOffset = EdgeOffset.GetSafeNormal() * EdgeRadius;
+    // Orbit the way that starts us off moving forward (and so curls round toward the wall).
+    EdgeSign = FVector::DotProduct(FVector::CrossProduct(Up, EdgeOffset), RunDir) >= 0.f ? 1.f : -1.f;
+    EdgeAngle = 0.f;
+    EdgeSpeed = FMath::Min(FMath::Max(Speed, OwnerCharacter->WallRunSpeed), MaxMomentumSpeed);
+    EdgeStartNormal = N;
+    AnchorNormal = N;
+
+    SwingMode = ESwingMode::EdgeWrap;
+    bOrbit = false;
+    AttachRope(EdgePivot, RunDir * EdgeSpeed, AnchorMaxTime, /*bLift=*/false);
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: glued wall ended - whipping round its end (%s, radius %.0f) at %.0f"),
+        Half > 0.f ? TEXT("thin wall, onto the back") : TEXT("corner, onto the end face"), EdgeRadius, EdgeSpeed);
+}
+
+void UGrappleComponent::UpdateEdgeWrap(float DeltaTime)
+{
+    auto* CMC = OwnerCharacter->GetCharacterMovement();
+    const FVector Up = URingFrameUtils::GetUpFor(OwnerCharacter);
+    EdgeAngle += EdgeSign * EdgeSpeed / EdgeRadius * DeltaTime;
+
+    const FVector Offset = FQuat(Up, EdgeAngle).RotateVector(EdgeOffset);
+    const FVector Tangent = (EdgeSign * FVector::CrossProduct(Up, Offset)).GetSafeNormal();
+    FHitResult Hit;
+    OwnerCharacter->SetActorLocation(EdgePivot + EdgeVertical + Offset, true, &Hit);
+    SwingVelocity = Tangent * EdgeSpeed;
+    CMC->Velocity = SwingVelocity;
+    OwnerCharacter->SetFacingDirection(Tangent);
+    if (ActiveLines.Num() > 0)
+    {
+        ActiveLines.Last().StartPoint = OwnerCharacter->GetActorLocation();
+    }
+
+    const FVector Up2 = Up;
+    if (Hit.bBlockingHit)
+    {
+        if (IsWallNormalFor(Hit.ImpactNormal, Up2, WallMaxTiltDegrees))
+        {
+            ArriveAtWall(Up2, Hit.ImpactNormal);   // ran into the next face: run along it
+        }
+        else
+        {
+            UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: edge whip blocked by %s"), *GetNameSafe(Hit.GetActor()));
+            ReleaseGrapple();
+        }
+        return;
+    }
+
+    // Once we're round a bit, look toward the pivot for the next face to run along.
+    if (FMath::Abs(EdgeAngle) > FMath::DegreesToRadians(30.f))
+    {
+        const FVector Pos = OwnerCharacter->GetActorLocation();
+        FHitResult Side;
+        FCollisionQueryParams Params(SCENE_QUERY_STAT(TMEdgeWrap), false, OwnerCharacter);
+        if (GetWorld()->LineTraceSingleByChannel(Side, Pos, Pos - Offset.GetSafeNormal() * 120.f, ECC_WorldStatic, Params)
+            && IsWallNormalFor(Side.ImpactNormal, Up2, WallMaxTiltDegrees)
+            && FVector::DotProduct(Side.ImpactNormal, EdgeStartNormal) < 0.7f)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: edge whip done after %.0f deg"), FMath::RadiansToDegrees(FMath::Abs(EdgeAngle)));
+            ArriveAtWall(Up2, Side.ImpactNormal);
+            return;
+        }
+    }
+    if (FMath::Abs(EdgeAngle) > FMath::DegreesToRadians(EdgeWrapMaxAngle))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: edge whip found no wall, letting go"));
+        ReleaseGrapple();
+    }
+}
+
+void UGrappleComponent::StartSurfaceCharge()
+{
+    if (!OwnerCharacter) return;
+    auto* CMC = OwnerCharacter->GetCharacterMovement();
+    bWallGlue = false;
+    bGroundAnchor = false;
+    SwingMode = ESwingMode::Swing;
+    bOrbit = false;
+    bCharging = true;
+    ChargeTime = 0.f;
+    SlingInputGone = 0.f;
+    AttachRope(SwingAnchorPoint, CMC->Velocity, AnchorMaxTime, /*bLift=*/false);
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: slingshot charging"));
+}
+
+void UGrappleComponent::UpdateGroundAnchor()
+{
+    if (!bGroundAnchor || !OwnerCharacter) return;
+    if (TabPhase != ETabPhase::Anchor)
+    {
+        bGroundAnchor = false;
+        return;
+    }
+    auto* CMC = OwnerCharacter->GetCharacterMovement();
+    const FVector Up = URingFrameUtils::GetUpFor(OwnerCharacter);
+    const FVector Input = FVector::VectorPlaneProject(OwnerCharacter->GetLastMovementInputVector(), Up).GetClampedToMaxSize(1.f);
+    const FVector Facing = URingFrameUtils::StripVertical(OwnerCharacter->GetActorForwardVector(), Up).GetSafeNormal();
+    const double Now = GetWorld()->GetRealTimeSeconds();
+    if (!Input.IsNearlyZero()) LastMoveInputTime = Now;
+
+    if (FVector::DotProduct(Input, Facing) < -0.5f)
+    {
+        StartSurfaceCharge();   // S on the ground: dig in and charge
+        return;
+    }
+    if (!CMC->IsMovingOnGround())
+    {
+        // Jumped or walked off: now it's an anchor in the air.
+        bGroundAnchor = false;
+        SwingMode = ESwingMode::Swing;
+        bOrbit = false;
+        AttachRope(SwingAnchorPoint, CMC->Velocity, AnchorMaxTime, /*bLift=*/false);
+        return;
+    }
+    if (Now - LastMoveInputTime > 0.06)
+    {
+        // No keys: let it reel you in.
+        bGroundAnchor = false;
+        SwingMode = ESwingMode::Swing;
+        bOrbit = false;
+        AttachRope(SwingAnchorPoint, CMC->Velocity, AnchorMaxTime, /*bLift=*/true);
+    }
+    // W/A/D: keep walking; the rope just trails.
+}
+
+void UGrappleComponent::AttachRope(const FVector& Point, const FVector& InitialVelocity, float MaxTime, bool bLift)
+{
+    auto* CMC = OwnerCharacter->GetCharacterMovement();
+    const FVector Up = URingFrameUtils::GetUpFor(OwnerCharacter);
+
+    SwingAnchorPoint = Point;
+    SwingRopeLength = FMath::Max(FVector::Dist(OwnerCharacter->GetActorLocation(), Point), bOrbit ? 100.f : MinRopeLength);
+    SwingVelocity = InitialVelocity;
+
+    // Starting from the ground: lift off a little so the first frames don't scrape the floor.
+    if (bLift && CMC->IsMovingOnGround())
+    {
+        OwnerCharacter->AddActorWorldOffset(Up * 10.f, true);
+        SwingVelocity += Up * (SwingMode == ESwingMode::CornerSwing ? 150.f : GroundLiftSpeed);
+    }
+
+    FGrappleLineData NewLine;
+    NewLine.StartPoint = OwnerCharacter->GetActorLocation();
+    NewLine.EndPoint = Point;
+    NewLine.Element = CurrentElement;
+    NewLine.Lifetime = MaxTime;
+    NewLine.bIsActive = true;
+    ActiveLines.Add(NewLine);
+    OnGrappleLineCreated.Broadcast(NewLine);
+
+    // Pause CharacterMovement so it doesn't fight the rope physics.
+    CMC->SetMovementMode(MOVE_None);
+    bIsSwinging = true;
+    CurrentState = EGrappleState::Swinging;
+    OnGrappleStateChanged.Broadcast(CurrentState);
+
+    GetWorld()->GetTimerManager().SetTimer(SwingTimerHandle, this, &UGrappleComponent::ReleaseGrapple, MaxTime, false);
+    ApplyElementalEffect(ActiveLines.Last());
+
+    static const TCHAR* ModeNames[] = { TEXT("ANCHOR swing"), TEXT("PULL to wall"), TEXT("ANCHOR corner swing"),
+        TEXT("PULL to ceiling"), TEXT("PULL to surface"), TEXT("EDGE whip") };
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: %s%s, rope %.0f, speed %.0f (zoom %.2f)%s"),
+        ModeNames[static_cast<int32>(SwingMode)], bOrbit ? TEXT(" (level orbit)") : TEXT(""),
+        SwingRopeLength, SwingVelocity.Size(), OwnerCharacter->GetSpeedFOVAlpha(),
+        bCeilingRunEligible && SwingMode == ESwingMode::CeilingPull ? TEXT(" -> ceiling run") : TEXT(""));
+}
+
+// ── ROPE PHYSICS (Verlet constraint) ───────────────────────────────────────
+// Gravity + steering move the character; if it ends up further than the rope
+// length from the anchor it's put back on the sphere, and the velocity is
+// turned along the rope's tangent (momentum is redirected, never braked).
 void UGrappleComponent::UpdateSwingPhysics(float DeltaTime)
 {
     if (!OwnerCharacter) return;
@@ -85,81 +576,115 @@ void UGrappleComponent::UpdateSwingPhysics(float DeltaTime)
         UpdateCornerSwing(DeltaTime);
         return;
     }
+    if (SwingMode == ESwingMode::EdgeWrap)
+    {
+        UpdateEdgeWrap(DeltaTime);
+        return;
+    }
 
     auto* CMC = OwnerCharacter->GetCharacterMovement();
-
-    // Step 1 — CharacterMovement is paused (MOVE_None) for the whole swing, so
-    // nothing else moves the character or applies gravity. We own it.
-
-    // Speed before this frame's forces: the rope may redirect momentum but never brake below it.
     const float PreSpeed = SwingVelocity.Size();
 
-    // Step 2 — Apply gravity manually to our swing velocity.
-    // Was GetWorld()->GetGravityZ() added to SwingVelocity.Z, i.e. world -Z.
-    // On the ring, gravity points away from the spin axis from wherever the
-    // player currently is, and its magnitude varies with altitude.
+    // Ring gravity (not world -Z). An orbit round a corner keeps the run level.
     const FRingWorldSpec& Spec = URingWorldSettings::GetSpec();
     const double Altitude = URingWorldGeometry::WorldToRing(Spec, OwnerCharacter->GetActorLocation()).Altitude;
     const double GravityMag = URingWorldGeometry::GetGravityAtAltitude(Spec, Altitude);
     const FVector GravityDir = URingFrameUtils::GetDownFor(OwnerCharacter);
-    SwingVelocity += GravityDir * static_cast<float>(GravityMag) * DeltaTime;
-
-    // Step 2b — WASD steers/pumps the swing (movement input, flattened to the ground plane).
     const FVector Up = -GravityDir;
-    const FVector Steer = FVector::VectorPlaneProject(OwnerCharacter->GetLastMovementInputVector(), Up).GetClampedToMaxSize(1.f);
-    SwingVelocity += Steer * SwingSteerAcceleration * DeltaTime;
+    SwingVelocity += GravityDir * static_cast<float>(GravityMag) * (bOrbit ? OrbitGravityScale : 1.f) * DeltaTime;
 
-    // Step 2c — Reel the rope in so swings gain height instead of dragging along the floor.
-    const float Reel = (SwingMode == ESwingMode::Swing) ? SwingReelInSpeed : WallReelInSpeed;
-    SwingRopeLength = FMath::Max(MinRopeLength, SwingRopeLength - Reel * DeltaTime);
+    // Holding an anchor:
+    //   no keys - reeled in toward it (keeps your momentum going)
+    //   W/A/D   - steer / pump the swing
+    //   S       - bleed your speed fast and hang there charging a slingshot; let go of S or Tab to launch
+    if (SwingMode == ESwingMode::Swing)
+    {
+        const FVector Pos = OwnerCharacter->GetActorLocation();
+        const FVector Input = FVector::VectorPlaneProject(OwnerCharacter->GetLastMovementInputVector(), Up).GetClampedToMaxSize(1.f);
+        const FVector Facing = URingFrameUtils::StripVertical(OwnerCharacter->GetActorForwardVector(), Up).GetSafeNormal();
+        const bool bHolding = (TabPhase == ETabPhase::Anchor);
+        const double Now = GetWorld()->GetRealTimeSeconds();
+        if (!Input.IsNearlyZero()) LastMoveInputTime = Now;
 
-    // Step 3 — Integrate position
-    FVector CurrentPos = OwnerCharacter->GetActorLocation();
-    FVector NewPos = CurrentPos + SwingVelocity * DeltaTime;
+        if (bCharging && bHolding && FVector::DotProduct(Input, Facing) < -0.5f)
+        {
+            SlingInputGone = 0.f;
+        }
+        else if (bCharging)
+        {
+            SlingInputGone += DeltaTime;
+            if (SlingInputGone > 0.08f)
+            {
+                Launch();   // let go of S: fly
+                return;
+            }
+        }
 
-    // Step 4 — Enforce rope length constraint (project back onto sphere)
-    FVector ToAnchor = SwingAnchorPoint - NewPos;
-    float CurrentDist = ToAnchor.Size();
+        if (bCharging)
+        {
+            ChargeTime += DeltaTime;
+            // Hang there: undo this frame's gravity and bleed the speed off quickly (not instantly).
+            SwingVelocity -= GravityDir * static_cast<float>(GravityMag) * (bOrbit ? OrbitGravityScale : 1.f) * DeltaTime;
+            SwingVelocity *= FMath::Exp(-SlingBrakeRate * DeltaTime);
+            OwnerCharacter->SetFOVTension(FMath::Clamp(ChargeTime / FMath::Max(SlingChargeTime, 0.01f), 0.f, 1.f) * SlingFOVPull);
+        }
+        else if (bHolding && Now - LastMoveInputTime > 0.06)
+        {
+            // No keys: reel in toward the anchor, rope kept tight so you don't bounce back out.
+            SwingVelocity += (SwingAnchorPoint - Pos).GetSafeNormal() * AnchorYankAcceleration * DeltaTime;
+            SwingRopeLength = FMath::Max(100.f, FMath::Min(SwingRopeLength, FVector::Dist(Pos, SwingAnchorPoint)));
+        }
+        else
+        {
+            SwingVelocity += Input * SwingSteerAcceleration * DeltaTime;
+        }
+    }
 
+    // Pulls reel in; a swing keeps its length.
+    const bool bPull = SwingMode == ESwingMode::WallPull || SwingMode == ESwingMode::CeilingPull || SwingMode == ESwingMode::SurfacePull;
+    SwingRopeLength = FMath::Max(bOrbit ? 100.f : MinRopeLength, SwingRopeLength - (bPull ? WallReelInSpeed : SwingReelInSpeed) * DeltaTime);
+    if (SwingMode == ESwingMode::Swing && TabPhase == ETabPhase::Anchor)
+    {
+        // Held anchor = a pivot: the rope takes up slack as you get closer, so the moment you
+        // pass the anchor you start swinging round it (e.g. round a corner) instead of flying on.
+        SwingRopeLength = FMath::Max(100.f, FMath::Min(SwingRopeLength, FVector::Dist(OwnerCharacter->GetActorLocation(), SwingAnchorPoint)));
+    }
+
+    FVector NewPos = OwnerCharacter->GetActorLocation() + SwingVelocity * DeltaTime;
+    const FVector ToAnchor = SwingAnchorPoint - NewPos;
+    const float CurrentDist = ToAnchor.Size();
     if (CurrentDist > SwingRopeLength && CurrentDist > KINDA_SMALL_NUMBER)
     {
-        // Push the position back so it's exactly RopeLength from the anchor
-        FVector Correction = ToAnchor.GetSafeNormal() * (CurrentDist - SwingRopeLength);
-        NewPos += Correction;
-
-        // The rope can't stretch: remove the outward part of the velocity...
-        FVector RopeDir = (SwingAnchorPoint - NewPos).GetSafeNormal();
+        NewPos += ToAnchor.GetSafeNormal() * (CurrentDist - SwingRopeLength);
+        const FVector RopeDir = (SwingAnchorPoint - NewPos).GetSafeNormal();
         const float Speed = SwingVelocity.Size();
-        float OutwardSpeed = FVector::DotProduct(SwingVelocity, -RopeDir);
+        const float OutwardSpeed = FVector::DotProduct(SwingVelocity, -RopeDir);
         if (OutwardSpeed > 0.f)
         {
-            // ...unless we're heading mostly away from the anchor (it's behind us): the rope
-            // would just stop us dead, so let go and keep the speed.
-            if (SwingMode == ESwingMode::Swing && Speed > 1.f && OutwardSpeed / Speed > SwingReleaseAwayDot)
+            // Heading mostly away from the anchor (it's behind you): the rope would just
+            // stop you dead, so let go and keep the speed.
+            if (SwingMode == ESwingMode::Swing && !bCharging && Speed > 1.f && OutwardSpeed / Speed > SwingReleaseAwayDot)
             {
                 UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: moving away from the anchor, released at %.0f"), Speed);
                 ReleaseGrapple();
                 return;
             }
+            // Redirect, don't brake: never slower than before this frame (only this frame's
+            // gravity may be taken away, or swings would gain energy).
             const FVector Tangent = SwingVelocity + RopeDir * OutwardSpeed;
-            // ...but redirect momentum rather than lose it: never slower than before this frame.
-            // (Only this frame's gravity may be taken away, or swings would gain energy.)
             SwingVelocity = Tangent.IsNearlyZero() ? Tangent
                 : Tangent.GetSafeNormal() * FMath::Max(Tangent.Size(), FMath::Min(PreSpeed, Speed));
         }
     }
 
-    // Step 5 — Apply damping so the swing doesn't gain energy over time
-    SwingVelocity *= FMath::Pow(MomentumConservation, DeltaTime);
+    SwingVelocity = ClampMomentum(SwingVelocity * FMath::Pow(MomentumConservation, DeltaTime));
 
-    // Step 6 — Move character to new position (bypasses CMC so we own movement).
-    // If we hit something, slide along it instead of keeping speed into it.
+    // Move (bypasses CMC). If we hit something, slide along it.
     FHitResult SweepHit;
     OwnerCharacter->SetActorLocation(NewPos, true, &SweepHit);
     if (SweepHit.bStartPenetrating)
     {
-        // Started slightly inside something (usually the floor): a sweep from
-        // inside can't move at all, which felt like sticking. Push out, retry.
+        // Started slightly inside something (usually the floor): push out and retry.
         OwnerCharacter->AddActorWorldOffset(SweepHit.Normal * (SweepHit.PenetrationDepth + 2.f));
         OwnerCharacter->SetActorLocation(NewPos, true, &SweepHit);
     }
@@ -168,178 +693,274 @@ void UGrappleComponent::UpdateSwingPhysics(float DeltaTime)
         SwingVelocity = FVector::VectorPlaneProject(SwingVelocity, SweepHit.ImpactNormal);
     }
     CMC->Velocity = SwingVelocity;
-
-    // Ceiling at full speed: once we're up against it, start the ceiling run.
-    if (SwingMode == ESwingMode::CeilingPull)
-    {
-        const float Half = OwnerCharacter->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-        const float DistToCeiling = FVector::DotProduct(OwnerCharacter->GetActorLocation() - SwingAnchorPoint, AnchorNormal);
-        const bool bTouchedCeiling = SweepHit.bBlockingHit && FVector::DotProduct(SweepHit.ImpactNormal, AnchorNormal) > 0.8f;
-        if (bTouchedCeiling || DistToCeiling < Half + CeilingArrivalSlack)
-        {
-            ArriveAtCeiling();
-            return;
-        }
-    }
-
-    // Wall anchor reached (close to it, or our capsule touched that wall):
-    // let go and go straight into a wall run along it.
-    // Measured to the wall SURFACE (not the anchor point, which may be far above/below),
-    // so arrival happens exactly when a wall run can see the wall and no snap is needed.
-    const bool bTouchedAnchorWall = SweepHit.bBlockingHit &&
-        FVector::DotProduct(SweepHit.ImpactNormal, AnchorNormal) > 0.8f;
-    const float DistToWall = FVector::DotProduct(OwnerCharacter->GetActorLocation() - SwingAnchorPoint, AnchorNormal);
-    if (SwingMode == ESwingMode::WallPull && (bTouchedAnchorWall || DistToWall < WallArrivalDistance))
-    {
-        ArriveAtWall(Up);
-        return;
-    }
-
-    // Swing: a pendulum for as long as you hold the button. If the swing carries
-    // you into the anchored surface, let go keeping momentum (minus the part
-    // pushing into that surface).
-    if (SwingMode == ESwingMode::Swing)
-    {
-        const bool bTouchedAnchorSurface = SweepHit.bBlockingHit && !AnchorNormal.IsNearlyZero() &&
-            FVector::DotProduct(SweepHit.ImpactNormal, AnchorNormal) > 0.8f;
-        if (bTouchedAnchorSurface)
-        {
-            if (!AnchorNormal.IsNearlyZero() && FVector::DotProduct(SwingVelocity, AnchorNormal) < 0.f)
-            {
-                SwingVelocity = FVector::VectorPlaneProject(SwingVelocity, AnchorNormal);
-            }
-            const FVector Keep = SwingVelocity;
-            ReleaseGrapple();
-            // Under a ceiling the release hop would push back into it, so skip it there.
-            if (FVector::DotProduct(AnchorNormal, Up) < -0.5f)
-            {
-                CMC->Velocity = Keep;
-            }
-            UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: swing touched its anchor surface, released at %.0f"), Keep.Size());
-            return;
-        }
-    }
-
-    // Step 7 — Update the visual line endpoint to track current player position
-    if (ActiveLines.Num() > 0)
-    {
-        ActiveLines.Last().StartPoint = NewPos;
-    }
-}
-
-void UGrappleComponent::ArriveAtWall(const FVector& Up)
-{
-    // Direction along the wall: keep whichever way we were already drifting sideways.
-    FVector AlongWall = FVector::VectorPlaneProject(FVector::VectorPlaneProject(SwingVelocity, AnchorNormal), Up);
-    if (AlongWall.Size() < 50.f)
-    {
-        // Came in head-on: pick the side the camera/actor is turned toward.
-        AlongWall = FVector::VectorPlaneProject(FVector::VectorPlaneProject(
-            OwnerCharacter->GetActorForwardVector() + OwnerCharacter->GetActorRightVector() * 0.01f, AnchorNormal), Up);
-    }
-    AlongWall = AlongWall.GetSafeNormal();
-    const float Speed = FMath::Max(SwingVelocity.Size(), OwnerCharacter->WallRunSpeed);
-
-    if (bFaceAlongWallOnArrival)
-    {
-        OwnerCharacter->SetFacingDirection(AlongWall);
-    }
-
-    SwingVelocity = AlongWall * Speed;
-    ReleaseGrapple();
-    // No release hop here: the wall run takes over.
-    OwnerCharacter->GetCharacterMovement()->Velocity = SwingVelocity;
-
-    if (TMState_WallRun::CanEnter(OwnerCharacter))
-    {
-        OwnerCharacter->TransitionTo<TMState_WallRun>();
-        UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: reached wall -> wall run at %.0f"), Speed);
-    }
-    else
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: reached wall, no wall run possible here (on ground or no wall beside us)"));
-    }
-}
-
-// ── CORNER SWING ───────────────────────────────────────────────────────────
-// Grappled the wall we're running into: instead of a yank, curve round so we end up
-// running along that wall at the same speed. The turn radius is recomputed every tick
-// from the distance left to the wall, so the turn finishes right as we reach it.
-void UGrappleComponent::UpdateCornerSwing(float DeltaTime)
-{
-    const FVector Up = URingFrameUtils::GetUpFor(OwnerCharacter);
-    const FVector Pos = OwnerCharacter->GetActorLocation();
-    const float DistToWall = FVector::DotProduct(Pos - SwingAnchorPoint, AnchorNormal);
-
-    const FVector Vh = URingFrameUtils::StripVertical(SwingVelocity, Up);
-    FVector Vv = SwingVelocity - Vh;
-    FVector Dir = Vh.IsNearlyZero() ? CornerExitDir : Vh.GetSafeNormal();
-    const float Phi = FMath::Acos(FMath::Clamp(FVector::DotProduct(Dir, CornerExitDir), -1.f, 1.f));
-
-    if (Phi < FMath::DegreesToRadians(3.f) || DistToWall <= WallArrivalDistance)
-    {
-        SwingVelocity = Dir * CornerSpeed;
-        ArriveAtWall(Up);
-        return;
-    }
-
-    // Heading at angle Phi to the wall direction covers R*(1-cos Phi) toward the wall while turning.
-    const float Remaining = FMath::Max(DistToWall - WallArrivalDistance * 0.8f, 1.f);
-    const float Radius = FMath::Max(Remaining / FMath::Max(1.f - FMath::Cos(Phi), 0.02f), CornerSwingMinRadius);
-    const float Step = FMath::Min(CornerSpeed / Radius * DeltaTime, Phi);
-    FVector Axis = FVector::CrossProduct(Dir, CornerExitDir);
-    Axis = Axis.IsNearlyZero() ? Up : Axis.GetSafeNormal();
-    Dir = URingFrameUtils::StripVertical(FQuat(Axis, Step).RotateVector(Dir), Up).GetSafeNormal();
-
-    // Light gravity, like a wall run.
-    const FRingWorldSpec& Spec = URingWorldSettings::GetSpec();
-    const double Altitude = URingWorldGeometry::WorldToRing(Spec, Pos).Altitude;
-    const float G = static_cast<float>(URingWorldGeometry::GetGravityAtAltitude(Spec, Altitude));
-    Vv += -Up * G * CornerSwingGravityScale * DeltaTime;
-    SwingVelocity = Dir * CornerSpeed + Vv;
-
-    FHitResult Hit;
-    OwnerCharacter->SetActorLocation(Pos + SwingVelocity * DeltaTime, true, &Hit);
-    if (Hit.bStartPenetrating)
-    {
-        OwnerCharacter->AddActorWorldOffset(Hit.Normal * (Hit.PenetrationDepth + 2.f));
-        OwnerCharacter->SetActorLocation(Pos + SwingVelocity * DeltaTime, true, &Hit);
-    }
-    OwnerCharacter->GetCharacterMovement()->Velocity = SwingVelocity;
-    // Turn the body (and, eased, the camera) with the swing.
-    OwnerCharacter->SetFacingDirection(Dir);
     if (ActiveLines.Num() > 0)
     {
         ActiveLines.Last().StartPoint = OwnerCharacter->GetActorLocation();
     }
 
-    if (Hit.bBlockingHit)
+    const bool bTouchedAnchorSurface = SweepHit.bBlockingHit && !AnchorNormal.IsNearlyZero() &&
+        FVector::DotProduct(SweepHit.ImpactNormal, AnchorNormal) > 0.8f;
+
+    // Holding a swing and it carries you onto a wall: stick to it (glued wall run).
+    if (SwingMode == ESwingMode::Swing && TabPhase == ETabPhase::Anchor && SweepHit.bBlockingHit
+        && IsWallNormalFor(SweepHit.ImpactNormal, Up, WallMaxTiltDegrees)
+        && FVector::VectorPlaneProject(URingFrameUtils::StripVertical(SwingVelocity, Up), SweepHit.ImpactNormal).Size() >= 400.f)
+    {
+        ArriveAtWall(Up, SweepHit.ImpactNormal);
+        return;
+    }
+
+    switch (SwingMode)
+    {
+    case ESwingMode::WallPull:
+    {
+        // Measured to the wall SURFACE (not the anchor point, which may be far above/below),
+        // so arrival happens exactly when a wall run can see the wall.
+        const float DistToWall = FVector::DotProduct(OwnerCharacter->GetActorLocation() - SwingAnchorPoint, AnchorNormal);
+        if (bTouchedAnchorSurface || DistToWall < WallArrivalDistance)
+        {
+            ArriveAtWall(Up, AnchorNormal);
+            return;
+        }
+        break;
+    }
+    case ESwingMode::CeilingPull:
+    {
+        const float Half = OwnerCharacter->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+        const float DistToCeiling = FVector::DotProduct(OwnerCharacter->GetActorLocation() - SwingAnchorPoint, AnchorNormal);
+        if (bTouchedAnchorSurface || DistToCeiling < Half + CeilingArrivalSlack)
+        {
+            ArriveAtCeiling();
+            return;
+        }
+        break;
+    }
+    case ESwingMode::SurfacePull:
+    case ESwingMode::Swing:
+    {
+        const bool bAtPoint = SwingMode == ESwingMode::SurfacePull &&
+            FVector::Dist(OwnerCharacter->GetActorLocation(), SwingAnchorPoint) < 150.f;
+        if (bTouchedAnchorSurface || bAtPoint)
+        {
+            // Let go keeping momentum, minus the part pushing into that surface.
+            if (!AnchorNormal.IsNearlyZero() && FVector::DotProduct(SwingVelocity, AnchorNormal) < 0.f)
+            {
+                SwingVelocity = FVector::VectorPlaneProject(SwingVelocity, AnchorNormal);
+            }
+            UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: reached the anchor surface, released at %.0f"), SwingVelocity.Size());
+            // Under a ceiling the release hop would push back into it.
+            StopRope(FVector::DotProduct(AnchorNormal, Up) >= -0.5f);
+            TabPhase = ETabPhase::Idle;
+            return;
+        }
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+void UGrappleComponent::ArriveAtWall(const FVector& Up, const FVector& WallNormal)
+{
+    // Direction along the wall: keep whichever way we were already drifting sideways.
+    FVector AlongWall = FVector::VectorPlaneProject(FVector::VectorPlaneProject(SwingVelocity, WallNormal), Up);
+    if (AlongWall.Size() < 50.f)
+    {
+        // Came in head-on: pick the side the camera/actor is turned toward.
+        AlongWall = FVector::VectorPlaneProject(FVector::VectorPlaneProject(
+            OwnerCharacter->GetActorForwardVector() + OwnerCharacter->GetActorRightVector() * 0.01f, WallNormal), Up);
+    }
+    AlongWall = AlongWall.GetSafeNormal();
+
+    // Double tap still held: stay stuck to the wall right here.
+    if (TabPhase == ETabPhase::Pull && bPullHeld)
+    {
+        BeginPerch(WallNormal, false);
+        return;
+    }
+
+    const float Speed = FMath::Min(FMath::Max(SwingVelocity.Size(), OwnerCharacter->WallRunSpeed), MaxMomentumSpeed);
+    if (bFaceAlongWallOnArrival)
+    {
+        OwnerCharacter->SetFacingDirection(AlongWall);
+    }
+    SwingVelocity = AlongWall * Speed;
+    const bool bHolding = (TabPhase == ETabPhase::Anchor);
+    StopRope(false);   // no hop: the wall run takes over
+    OwnerCharacter->GetCharacterMovement()->Velocity = SwingVelocity;
+
+    if (TMState_WallRun::CanEnter(OwnerCharacter))
+    {
+        OwnerCharacter->TransitionTo<TMState_WallRun>();
+        bWallGlue = bHolding;
+        UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: reached wall -> wall run at %.0f%s"), Speed, bWallGlue ? TEXT(" (glued, holding)") : TEXT(""));
+    }
+    else
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: reached wall, no wall run possible here (on ground or no wall beside us)"));
+    }
+    if (!bWallGlue) TabPhase = ETabPhase::Idle;
+}
+
+// ── CORNER SWING ───────────────────────────────────────────────────────────
+// Held an anchor on the wall we're running into: curve round so we end up
+// running along that wall at the same speed. The turn radius is recomputed every
+// tick from the distance left to the wall, so the turn finishes as we reach it.
+void UGrappleComponent::UpdateCornerSwing(float DeltaTime)
+{
+    // Follows the path set up in StartAnchor: dash, then snap round onto the wall.
+    auto* CMC = OwnerCharacter->GetCharacterMovement();
+    const FVector Up = URingFrameUtils::GetUpFor(OwnerCharacter);
+    CornerTravel += CornerSpeed * DeltaTime;
+
+    FVector Target;
+    FVector Dir;
+    bool bDone = false;
+    if (CornerTravel < CornerStraight)
+    {
+        Target = CornerP0 + CornerHeading * CornerTravel;
+        Dir = CornerHeading;
+    }
+    else
+    {
+        const float U = CornerCurveLen > 1.f ? FMath::Clamp((CornerTravel - CornerStraight) / CornerCurveLen, 0.f, 1.f) : 1.f;
+        Target = (1.f - U) * (1.f - U) * CornerP1 + 2.f * (1.f - U) * U * CornerC + U * U * CornerP2;
+        Dir = (2.f * (1.f - U) * (CornerC - CornerP1) + 2.f * U * (CornerP2 - CornerC)).GetSafeNormal();
+        bDone = U >= 1.f;
+    }
+    Target += Up * CornerLift;
+
+    FHitResult Hit;
+    OwnerCharacter->SetActorLocation(Target, true, &Hit);
+    SwingVelocity = Dir * CornerSpeed;
+    CMC->Velocity = SwingVelocity;
+    OwnerCharacter->SetFacingDirection(Dir);   // body (and, eased, the camera) turn with it
+    if (ActiveLines.Num() > 0)
+    {
+        ActiveLines.Last().StartPoint = OwnerCharacter->GetActorLocation();
+    }
+
+    if (Hit.bBlockingHit && !bDone)
     {
         if (FVector::DotProduct(Hit.ImpactNormal, AnchorNormal) > 0.8f)
         {
-            SwingVelocity = Dir * CornerSpeed;   // reached the wall a bit early: run along it
-            ArriveAtWall(Up);
+            bDone = true;   // touched the wall a bit early: start running along it
         }
         else if (FVector::DotProduct(Hit.ImpactNormal, Up) > 0.7f)
         {
-            SwingVelocity = Dir * CornerSpeed;   // skimming the floor: drop the downward part
+            CornerLift += 5.f;   // grazing the floor: ride a little higher
         }
         else
         {
-            UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: corner swing blocked by %s"), *GetNameSafe(Hit.GetActor()));
-            SwingVelocity = FVector::VectorPlaneProject(SwingVelocity, Hit.ImpactNormal);
+            UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: corner snap blocked by %s"), *GetNameSafe(Hit.GetActor()));
             ReleaseGrapple();
+            return;
         }
+    }
+    if (bDone)
+    {
+        SwingVelocity = CornerExitDir * CornerSpeed;
+        ArriveAtWall(Up, AnchorNormal);
     }
 }
 
 void UGrappleComponent::ArriveAtCeiling()
 {
+    // Double tap still held: stay stuck to the ceiling right here.
+    if (TabPhase == ETabPhase::Pull && bPullHeld)
+    {
+        BeginPerch(AnchorNormal, true);
+        return;
+    }
     const FVector Normal = AnchorNormal;
-    ReleaseGrapple();
-    OwnerCharacter->CeilingRunNormal = Normal;
-    OwnerCharacter->CeilingRunEntrySpeed = CeilingEntrySpeed;   // the speed you built up, not the yank
-    OwnerCharacter->TransitionTo<TMState_CeilingRun>();
+    TabPhase = ETabPhase::Idle;
+    if (bCeilingRunEligible)
+    {
+        StopRope(false);
+        OwnerCharacter->CeilingRunNormal = Normal;
+        OwnerCharacter->CeilingRunEntrySpeed = FMath::Min(CeilingEntrySpeed, MaxMomentumSpeed);   // the speed you built up
+        OwnerCharacter->TransitionTo<TMState_CeilingRun>();
+    }
+    else
+    {
+        // Not fast enough to run on it: let go along the ceiling, no hop back into it.
+        SwingVelocity = FVector::VectorPlaneProject(SwingVelocity, Normal);
+        StopRope(false);
+    }
+}
+
+// ── STUCK TO A SPOT (double tap held) ──────────────────────────────────────
+void UGrappleComponent::BeginPerch(const FVector& SurfaceNormal, bool bCeiling)
+{
+    auto* CMC = OwnerCharacter->GetCharacterMovement();
+    bIsSwinging = false;
+    bOrbit = false;
+    GetWorld()->GetTimerManager().ClearTimer(SwingTimerHandle);
+    SwingVelocity = FVector::ZeroVector;
+    CMC->Velocity = FVector::ZeroVector;
+    CMC->SetMovementMode(MOVE_None);
+    bPerched = true;
+    bPerchOnCeiling = bCeiling;
+    PerchNormal = SurfaceNormal;
+    if (bCeiling)
+    {
+        OwnerCharacter->SetSurfaceUp(SurfaceNormal, true);   // stand on it: the view rolls over
+    }
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: stuck to the %s until Tab is released"), bCeiling ? TEXT("ceiling") : TEXT("wall"));
+}
+
+void UGrappleComponent::EndPerch(bool bJump)
+{
+    if (!bPerched) return;
+    bPerched = false;
+    auto* CMC = OwnerCharacter->GetCharacterMovement();
+    if (bPerchOnCeiling && !bJump)
+    {
+        // Mag boots: let go of the rope and you stay on the ceiling, walking. Double jump to drop.
+        CurrentState = EGrappleState::Inactive;
+        OnGrappleStateChanged.Broadcast(CurrentState);
+        TabPhase = ETabPhase::Idle;
+        OwnerCharacter->CeilingRunNormal = PerchNormal;
+        OwnerCharacter->CeilingRunEntrySpeed = 0.f;
+        OwnerCharacter->TransitionTo<TMState_CeilingRun>();
+        UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: let go of the ceiling spot - mag boots hold you there"));
+        return;
+    }
+    if (bPerchOnCeiling)
+    {
+        OwnerCharacter->SetSurfaceUp(FVector::ZeroVector, false);
+        OwnerCharacter->StartCeilingRunCooldown();
+    }
+    const FVector Up = URingFrameUtils::GetUpFor(OwnerCharacter);
+    CMC->SetMovementMode(MOVE_Falling);
+    CMC->Velocity = bJump ? PerchNormal * PerchJumpOffSpeed + Up * ReleaseHopSpeed : PerchNormal * 50.f;
+    CurrentState = EGrappleState::Inactive;
+    OnGrappleStateChanged.Broadcast(CurrentState);
+    TabPhase = ETabPhase::Idle;
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: let go of the spot%s"), bJump ? TEXT(" (jumped off)") : TEXT(""));
+}
+
+void UGrappleComponent::JumpOffPerch()
+{
+    EndPerch(true);
+}
+
+// Ends rope physics only (the Tab action may continue, e.g. into a glued wall run).
+void UGrappleComponent::StopRope(bool bHop)
+{
+    if (!bIsSwinging) return;
+    bIsSwinging = false;
+    bOrbit = false;
+    if (OwnerCharacter)
+    {
+        auto* CMC = OwnerCharacter->GetCharacterMovement();
+        CMC->SetMovementMode(MOVE_Falling);
+        CMC->Velocity = ClampMomentum(SwingVelocity) + (bHop ? URingFrameUtils::GetUpFor(OwnerCharacter) * ReleaseHopSpeed : FVector::ZeroVector);
+    }
+    CurrentState = EGrappleState::Inactive;
+    OnGrappleStateChanged.Broadcast(CurrentState);
+    GetWorld()->GetTimerManager().ClearTimer(SwingTimerHandle);
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: rope off, exit speed %.0f"), SwingVelocity.Size());
 }
 
 // ── SLAM ───────────────────────────────────────────────────────────────────
@@ -508,108 +1129,12 @@ void UGrappleComponent::FireGrapple(FVector AimLocation, AActor* TargetEnemy, FV
 
 void UGrappleComponent::PerformGrappleSwing(FVector AnchorPoint)
 {
-    if (!OwnerCharacter) return;
-
-    // Store pre-grapple velocity for initial swing velocity
-    FVector PreVelocity = OwnerCharacter->GetCharacterMovement()->Velocity;
-    PreserveMomentum(PreVelocity);
-
-    // Record anchor and rope length for physics
-    SwingAnchorPoint = AnchorPoint;
-    SwingRopeLength = FVector::Dist(OwnerCharacter->GetActorLocation(), AnchorPoint);
-    SwingRopeLength = FMath::Max(SwingRopeLength, MinRopeLength);
-
-    // Wall = surface normal close to horizontal (perpendicular to local up).
-    const FVector Up = URingFrameUtils::GetUpFor(OwnerCharacter);
-    const float MaxUpDot = FMath::Sin(FMath::DegreesToRadians(WallMaxTiltDegrees));
-    bWallAnchor = !AnchorNormal.IsNearlyZero() && FMath::Abs(FVector::DotProduct(AnchorNormal, Up)) <= MaxUpDot;
-    const bool bCeiling = !AnchorNormal.IsNearlyZero() && FVector::DotProduct(AnchorNormal, -Up) >= CeilingMinDownDot;
-
-    const FVector Pos = OwnerCharacter->GetActorLocation();
-    const FVector Vh = URingFrameUtils::StripVertical(PreVelocity, Up);
-    SwingMode = ESwingMode::Swing;
-    if (bWallAnchor)
-    {
-        SwingMode = ESwingMode::WallPull;
-        // Close to the wall and running into it: swing round onto it instead of yanking.
-        const float DistToWall = FVector::DotProduct(Pos - AnchorPoint, AnchorNormal);
-        const float Approach = Vh.IsNearlyZero() ? 0.f : FVector::DotProduct(Vh.GetSafeNormal(), -AnchorNormal);
-        if (bEnableCornerSwing && DistToWall <= CornerSwingMaxDistance && DistToWall > WallArrivalDistance
-            && Vh.Size() >= CornerSwingMinSpeed && Approach >= CornerSwingMinApproach)
-        {
-            SwingMode = ESwingMode::CornerSwing;
-            // Turn toward the side you aimed at (else the way you're drifting, else your right).
-            const FVector Along = FVector::CrossProduct(Up, AnchorNormal).GetSafeNormal();
-            const float Lateral = FVector::DotProduct(AnchorPoint - Pos, Along);
-            const float Drift = FVector::DotProduct(Vh, Along);
-            const float Side = FMath::Abs(Lateral) > 30.f ? Lateral
-                : (FMath::Abs(Drift) > 50.f ? Drift : FVector::DotProduct(OwnerCharacter->GetActorRightVector(), Along));
-            CornerExitDir = Along * (Side >= 0.f ? 1.f : -1.f);
-            CornerSpeed = FMath::Max(Vh.Size(), OwnerCharacter->WallRunSpeed) * CornerSwingSpeedBoost;
-        }
-    }
-    else if (bCeiling && OwnerCharacter->CanStartCeilingRun())
-    {
-        SwingMode = ESwingMode::CeilingPull;
-        CeilingEntrySpeed = Vh.Size();
-    }
-
-    // Yank toward the anchor so the move starts immediately, even from standing.
-    const FVector ToAnchor = (AnchorPoint - Pos).GetSafeNormal();
-    switch (SwingMode)
-    {
-    case ESwingMode::WallPull:
-    case ESwingMode::CeilingPull:
-        SwingVelocity += ToAnchor * WallPullSpeed;
-        break;
-    case ESwingMode::Swing:
-        SwingVelocity += ToAnchor * SwingAttachTug;
-        break;
-    case ESwingMode::CornerSwing:
-        // Keep the run, level out: the turn does the work.
-        SwingVelocity = Vh + Up * FMath::Clamp(FVector::DotProduct(PreVelocity, Up), -200.f, 200.f);
-        break;
-    }
-
-    // Create visual line data
-    FGrappleLineData NewLine;
-    NewLine.StartPoint = OwnerCharacter->GetActorLocation();
-    NewLine.EndPoint = AnchorPoint;
-    NewLine.Element = CurrentElement;
-    NewLine.Lifetime = MaxSwingTime;
-    NewLine.bIsActive = true;
-
-    ActiveLines.Add(NewLine);
-    OnGrappleLineCreated.Broadcast(NewLine);
-
-    // Starting from the ground: lift off a little so the first frames don't scrape the floor.
-    if (OwnerCharacter->GetCharacterMovement()->IsMovingOnGround())
-    {
-        OwnerCharacter->AddActorWorldOffset(Up * 10.f, true);
-        SwingVelocity += Up * (SwingMode == ESwingMode::CornerSwing ? 150.f : GroundLiftSpeed);
-    }
-
-    // Pause CharacterMovement so it doesn't fight the swing physics.
-    OwnerCharacter->GetCharacterMovement()->SetMovementMode(MOVE_None);
-
-    bIsSwinging = true;
-    CurrentState = EGrappleState::Swinging;
-    OnGrappleStateChanged.Broadcast(CurrentState);
-
-    // Auto-release after MaxSwingTime
-    GetWorld()->GetTimerManager().SetTimer(
-        SwingTimerHandle,
-        this, &UGrappleComponent::ReleaseGrapple,
-        MaxSwingTime,
-        false);
-
-    ApplyElementalEffect(ActiveLines.Last());
-
-    static const TCHAR* ModeNames[] = { TEXT("SWING"), TEXT("WALL pull"), TEXT("CORNER swing"), TEXT("CEILING pull (ceiling run)") };
-    UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: %s to %s, rope %.0f, speed %.0f (zoom %.2f)%s"),
-        ModeNames[static_cast<int32>(SwingMode)], *AnchorPoint.ToString(), SwingRopeLength, Vh.Size(),
-        OwnerCharacter->GetSpeedFOVAlpha(),
-        SwingMode == ESwingMode::CornerSwing ? *FString::Printf(TEXT(", turning %s"), *CornerExitDir.ToCompactString()) : TEXT(""));
+    // FireGrapple / Blueprint path: behaves like a double-tap pull (mana already paid).
+    PendingPoint = AnchorPoint;
+    PendingNormal = AnchorNormal;
+    bPullHeld = false;
+    TabPhase = ETabPhase::Pull;
+    StartPull(false);
 }
 
 void UGrappleComponent::PerformCombatGrapple(AActor* TargetEnemy, ECombatGrappleMove MoveType)
@@ -724,27 +1249,41 @@ void UGrappleComponent::ExecuteCombatMove(ECombatGrappleMove MoveType, AActor* T
     PerformCombatGrapple(Enemy, MoveType);
 }
 
+void UGrappleComponent::Launch()
+{
+    const float Alpha = FMath::Clamp(ChargeTime / FMath::Max(SlingChargeTime, 0.01f), 0.f, 1.f);
+    bCharging = false;
+    const FVector Up = URingFrameUtils::GetUpFor(OwnerCharacter);
+    const float Speed = FMath::Lerp(SlingMinSpeed, SlingMaxSpeed, Alpha);
+    SwingVelocity = (SwingAnchorPoint - OwnerCharacter->GetActorLocation()).GetSafeNormal() * Speed + Up * SlingLift;
+    OwnerCharacter->AddFOVKick(SlingLaunchFOVKick * (0.4f + 0.6f * Alpha));
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: SLINGSHOT after %.2fs charge (%.0f%%) -> %.0f cm/s"), ChargeTime, Alpha * 100.f, Speed);
+    StopRope(false);
+    TabPhase = ETabPhase::Idle;
+}
+
 void UGrappleComponent::ReleaseGrapple()
 {
-    if (!bIsSwinging) return;
-
-    bIsSwinging = false;
-
-    // Hand control back to CharacterMovement, carrying the swing's momentum.
-    if (OwnerCharacter)
+    // Let go of whatever Tab is doing: rope, wall glue, or a spot you're stuck to.
+    bCharging = false;
+    bGroundAnchor = false;
+    if (bWallGlue)
     {
-        auto* CMC = OwnerCharacter->GetCharacterMovement();
-        CMC->SetMovementMode(MOVE_Falling);
-        CMC->Velocity = SwingVelocity + URingFrameUtils::GetUpFor(OwnerCharacter) * ReleaseHopSpeed;
+        bWallGlue = false;
+        UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: unglued from the wall"));
     }
-
-    CurrentState = EGrappleState::Inactive;
-    OnGrappleStateChanged.Broadcast(CurrentState);
-
-    GetWorld()->GetTimerManager().ClearTimer(SwingTimerHandle);
-
-    UE_LOG(LogTemp, Warning, TEXT("[TM] Grapple: released, exit velocity %s"),
-        *SwingVelocity.ToString());
+    if (bPerched)
+    {
+        EndPerch(false);
+    }
+    else if (bIsSwinging)
+    {
+        StopRope(true);
+    }
+    if (TabPhase == ETabPhase::Anchor || TabPhase == ETabPhase::Pull)
+    {
+        TabPhase = ETabPhase::Idle;
+    }
 }
 
 void UGrappleComponent::CancelAiming()
