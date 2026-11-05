@@ -60,6 +60,30 @@ def _preview_material():
     return mat
 
 
+def _metal_material():
+    mat = bpy.data.materials.new("ZombiePreviewMetal")
+    mat.use_nodes = True
+    nodes, links = mat.node_tree.nodes, mat.node_tree.links
+    bsdf = nodes["Principled BSDF"]
+    attr = nodes.new("ShaderNodeVertexColor"); attr.layer_name = "Col"
+    sep = nodes.new("ShaderNodeSeparateColor")
+    links.new(attr.outputs["Color"], sep.inputs["Color"])
+    steel = (0.20, 0.21, 0.25, 1); rust = (0.32, 0.11, 0.05, 1)
+    m = nodes.new("ShaderNodeMix"); m.data_type = 'RGBA'
+    m.inputs["A"].default_value = steel; m.inputs["B"].default_value = rust
+    links.new(sep.outputs["Green"], m.inputs["Factor"])
+    links.new(m.outputs["Result"], bsdf.inputs["Base Color"])
+    inv = nodes.new("ShaderNodeMath"); inv.operation = 'SUBTRACT'; inv.inputs[0].default_value = 1.0
+    links.new(sep.outputs["Green"], inv.inputs[1])
+    links.new(inv.outputs[0], bsdf.inputs["Metallic"])
+    bsdf.inputs["Roughness"].default_value = 0.32
+    bsdf.inputs["Emission Color"].default_value = (0.9, 0.2, 1.0, 1)
+    em = nodes.new("ShaderNodeMath"); em.operation = 'MULTIPLY'; em.inputs[1].default_value = 12.0
+    links.new(attr.outputs["Alpha"], em.inputs[0])
+    links.new(em.outputs[0], bsdf.inputs["Emission Strength"])
+    return mat
+
+
 def _set_engine(scene):
     for eng in ("BLENDER_EEVEE_NEXT", "BLENDER_EEVEE", "CYCLES"):
         try:
@@ -82,10 +106,12 @@ def render(body, arm, out_dir, name, archetype):
     scene.render.film_transparent = False
     scene.view_settings.view_transform = 'AgX' if 'AgX' in [i.identifier for i in scene.view_settings.bl_rna.properties['view_transform'].enum_items] else 'Filmic'
 
-    # Preview material on every region slot.
+    # Preview materials: flesh on every region slot, steel on the "Metal" slot.
     mat = _preview_material()
+    metal = _metal_material()
     for i in range(len(body.data.materials)):
-        body.data.materials[i] = mat
+        orig = body.data.materials[i]
+        body.data.materials[i] = metal if (orig and orig.name.startswith("Metal")) else mat
 
     # World: dark blue-grey, stylized.
     world = bpy.data.worlds.new("PreviewWorld")
