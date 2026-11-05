@@ -129,6 +129,13 @@ struct FLimbShape
 
     /** Hard-edged machine part: few sides, ribbed segments, no lumps. */
     bool bMechanical = false;
+
+    /** Which vertex-colour pattern to paint: flesh (veins/bruises), growth (pulse phase), metal (rust). */
+    enum class EStyle : uint8 { Flesh, Growth, Metal };
+    EStyle Style = EStyle::Flesh;
+
+    /** Strength of the fine wrinkle noise, as a fraction of Lumpiness. */
+    float Wrinkle = 0.35f;
     int32 Segments = 3;
 
     float MaxRadius() const
@@ -197,6 +204,14 @@ struct FZombieArchetype
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Growths")
     FIntPoint TendrilCount = FIntPoint(0, 2);
 
+    /** Grow a palm and five fingers on each hand (off for blade-armed forms). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Proportions")
+    bool bHasFingers = true;
+
+    /** Claw length past each fingertip (cm). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Proportions")
+    float ClawLength = 1.5f;
+
     /** Chance this corpse was "stuffed" by a robot: 1-2 machine limbs plus torso plates. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Machine")
     float RobotChance = 0.3f;
@@ -224,6 +239,8 @@ struct FZombieArchetype
 /** Generated triangle mesh ready for UProceduralMeshComponent. */
 struct FLimbMesh
 {
+    /** Per-vertex detail for the zombie materials: R = veins, G = mottling / rust / pulse phase, B = crease darkening. */
+    TArray<FColor> Colors;
     TArray<FVector> Vertices;
     TArray<int32> Triangles;
     TArray<FVector> Normals;

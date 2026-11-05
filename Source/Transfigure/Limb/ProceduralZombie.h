@@ -25,7 +25,7 @@ class UMaterialInterface;
 class UMaterialInstanceDynamic;
 
 /** Which material a generated mesh uses. */
-enum class ELimbMaterial : uint8 { Skin, Growth, Metal };
+enum class ELimbMaterial : uint8 { Skin, Growth, Metal, Bone };
 
 /** Runtime state of one generated part. */
 USTRUCT()
@@ -81,6 +81,19 @@ public:
     /** Animation Blueprint for the hidden skeleton. Defaults to the Mannequin's unarmed ABP. */
     UPROPERTY(EditAnywhere, Category = "Zombie|Body")
     TSoftClassPtr<UAnimInstance> BodyAnimClass;
+
+    /** Materials made by Tools/create_zombie_materials.py (fall back to the engine's plain material). */
+    UPROPERTY(EditAnywhere, Category = "Zombie|Look")
+    TSoftObjectPtr<UMaterialInterface> FleshMaterialAsset;
+
+    UPROPERTY(EditAnywhere, Category = "Zombie|Look")
+    TSoftObjectPtr<UMaterialInterface> GrowthMaterialAsset;
+
+    UPROPERTY(EditAnywhere, Category = "Zombie|Look")
+    TSoftObjectPtr<UMaterialInterface> MetalMaterialAsset;
+
+    UPROPERTY(EditAnywhere, Category = "Zombie|Look")
+    FLinearColor BoneColor = FLinearColor(0.62f, 0.57f, 0.48f);
 
     /** One entry per generated part. Defaults to a 10-part humanoid on Mannequin bones. */
     UPROPERTY(EditAnywhere, Category = "Zombie|Body")
@@ -138,7 +151,14 @@ private:
     void ApplyArchetypeBody(const FZombieArchetype& Arch);
     void BuildPart(int32 Index, const FLimbPartSpec& Spec, FRandomStream& Rng, float Fatness, bool bMechanical);
     void AddGrowths(const FZombieArchetype& Arch, FRandomStream& Rng);
-    void AddDecor(int32 OwnerPart, const FLimbShape& Shape, ELimbMaterial Material);
+    void AddDecor(int32 OwnerPart, const FLimbShape& Shape, ELimbMaterial Material, FName Bone = NAME_None);
+    void AddHandsFeetFace(const FZombieArchetype& Arch, FRandomStream& Rng);
+    /** Infected wound cap + bone stub for a severed part. bOnBody: bone points out of the body (else out of the limb). */
+    void MakeWound(const FLimbPartRuntime& Part, bool bOnBody, FLimbShape& OutCap, FLimbShape& OutBone) const;
+    int32 PartIndex(ELimbPart Part) const;
+    FTransform RefPoseCS(int32 BoneIndex) const;
+    /** Position of bone To in bone From's local space (reference pose). */
+    bool BoneLocalPoint(FName From, FName To, FVector& Out) const;
     UMaterialInterface* GetMaterial(ELimbMaterial Kind) const;
 
     int32 FindHitPart(const FVector& HitLocation) const;
@@ -164,6 +184,9 @@ private:
 
     UPROPERTY()
     TObjectPtr<UMaterialInstanceDynamic> MetalMaterial;
+
+    UPROPERTY()
+    TObjectPtr<UMaterialInstanceDynamic> BoneMaterial;
 
     UPROPERTY()
     TObjectPtr<UMaterialInterface> BaseMaterial;

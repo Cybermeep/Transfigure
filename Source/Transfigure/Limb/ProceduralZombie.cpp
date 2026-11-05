@@ -47,6 +47,9 @@ AProceduralZombie::AProceduralZombie()
     BodyAnimClass = TSoftClassPtr<UAnimInstance>(FSoftObjectPath(TEXT("/Game/Characters/Mannequins/Anims/Unarmed/ABP_Unarmed.ABP_Unarmed_C")));
     Parts = MakeDefaultParts();
     Archetypes = MakeDefaultArchetypes();
+    FleshMaterialAsset = TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/Zombie/Materials/M_ZombieFlesh.M_ZombieFlesh")));
+    GrowthMaterialAsset = TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/Zombie/Materials/M_ZombieGrowth.M_ZombieGrowth")));
+    MetalMaterialAsset = TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/Zombie/Materials/M_ZombieMetal.M_ZombieMetal")));
 
     // Corpses persist for a while (and can still be dismembered).
     CorpseLifetime = 30.f;
@@ -83,9 +86,9 @@ TArray<FLimbPartSpec> AProceduralZombie::MakeDefaultParts()
         P(ELimbPart::Torso,     TEXT("pelvis"),     TEXT("neck_01"),   0.f, 14.f, 13.f, 3.f, 9999.f, false, 1.f, ELimbPart::None),
         P(ELimbPart::Head,      TEXT("head"),       TEXT(""),         24.f,  8.f,  7.f, 2.f,   50.f, true,  2.f, ELimbPart::Torso),
         P(ELimbPart::UpperArmL, TEXT("upperarm_l"), TEXT("lowerarm_l"), 0.f, 5.5f, 4.5f, 1.5f, 40.f, true,  1.f, ELimbPart::Torso),
-        P(ELimbPart::LowerArmL, TEXT("lowerarm_l"), TEXT("hand_l"),   14.f, 4.5f, 3.5f, 1.f,   30.f, true,  1.f, ELimbPart::UpperArmL),
+        P(ELimbPart::LowerArmL, TEXT("lowerarm_l"), TEXT("hand_l"),    4.f, 4.5f, 3.5f, 1.f,   30.f, true,  1.f, ELimbPart::UpperArmL),
         P(ELimbPart::UpperArmR, TEXT("upperarm_r"), TEXT("lowerarm_r"), 0.f, 5.5f, 4.5f, 1.5f, 40.f, true,  1.f, ELimbPart::Torso),
-        P(ELimbPart::LowerArmR, TEXT("lowerarm_r"), TEXT("hand_r"),   14.f, 4.5f, 3.5f, 1.f,   30.f, true,  1.f, ELimbPart::UpperArmR),
+        P(ELimbPart::LowerArmR, TEXT("lowerarm_r"), TEXT("hand_r"),    4.f, 4.5f, 3.5f, 1.f,   30.f, true,  1.f, ELimbPart::UpperArmR),
         P(ELimbPart::ThighL,    TEXT("thigh_l"),    TEXT("calf_l"),    0.f, 8.f,  6.f,  2.f,   50.f, true,  1.f, ELimbPart::Torso),
         P(ELimbPart::CalfL,     TEXT("calf_l"),     TEXT("foot_l"),    6.f, 6.f,  4.5f, 1.5f,  40.f, true,  1.f, ELimbPart::ThighL),
         P(ELimbPart::ThighR,    TEXT("thigh_r"),    TEXT("calf_r"),    0.f, 8.f,  6.f,  2.f,   50.f, true,  1.f, ELimbPart::Torso),
@@ -136,7 +139,8 @@ TArray<FZombieArchetype> AProceduralZombie::MakeDefaultArchetypes()
     Gaunt.ArmThickness = 0.7f;
     Gaunt.LegThickness = 0.75f;
     Gaunt.HeadScale = 0.9f;
-    Gaunt.ForearmExtraLength = 28.f;
+    Gaunt.ForearmExtraLength = 38.f;   // blades instead of hands
+    Gaunt.bHasFingers = false;
     Gaunt.ForearmTipScale = 0.35f;
     Gaunt.GrowthCount = FIntPoint(0, 2);
     Gaunt.GrowthRadius = FVector2D(2.f, 5.f);
@@ -190,11 +194,27 @@ void AProceduralZombie::BeginPlay()
     OriginalMaxHealth = MaxHealth;
     MeshRelativeRotation = GetMesh()->GetRelativeRotation();
 
-    if (BaseMaterial)
+    auto MakeMID = [this](const TSoftObjectPtr<UMaterialInterface>& Asset) -> UMaterialInstanceDynamic*
     {
-        SkinMaterial = UMaterialInstanceDynamic::Create(BaseMaterial, this);
-        GrowthMaterial = UMaterialInstanceDynamic::Create(BaseMaterial, this);
-        MetalMaterial = UMaterialInstanceDynamic::Create(BaseMaterial, this);
+        UMaterialInterface* Parent = Asset.LoadSynchronous();
+        if (!Parent)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("[TM] %s: material %s missing (run Tools/create_zombie_materials.py) - using plain material"),
+                *GetName(), *Asset.ToString());
+            Parent = BaseMaterial;
+        }
+        return Parent ? UMaterialInstanceDynamic::Create(Parent, this) : nullptr;
+    };
+    SkinMaterial = MakeMID(FleshMaterialAsset);
+    GrowthMaterial = MakeMID(GrowthMaterialAsset);
+    MetalMaterial = MakeMID(MetalMaterialAsset);
+    BoneMaterial = MakeMID(FleshMaterialAsset);
+    if (BoneMaterial)
+    {
+        BoneMaterial->SetVectorParameterValue(TEXT("Color"), BoneColor);
+        BoneMaterial->SetVectorParameterValue(TEXT("BruiseColor"), BoneColor * 0.75f);
+        BoneMaterial->SetVectorParameterValue(TEXT("VeinColor"), BoneColor * 0.6f);
+        BoneMaterial->SetScalarParameterValue(TEXT("SubsurfaceAmount"), 0.2f);
     }
 
     RebuildBody();
@@ -266,8 +286,21 @@ void AProceduralZombie::RebuildBody()
     const FLinearColor Skin = RandomHSV(Rng, Arch.SkinHue, Arch.SkinSaturation, Arch.SkinValue);
     const FLinearColor Growth = RandomHSV(Rng,
         FVector2D(Arch.SkinHue.X + 20.f, Arch.SkinHue.Y + 35.f), FVector2D(0.55f, 0.75f), FVector2D(0.45f, 0.62f));
-    if (SkinMaterial) SkinMaterial->SetVectorParameterValue(TEXT("Color"), Skin);
-    if (GrowthMaterial) GrowthMaterial->SetVectorParameterValue(TEXT("Color"), Growth);
+    if (SkinMaterial)
+    {
+        const FLinearColor SkinHSV = Skin.LinearRGBToHSV();
+        SkinMaterial->SetVectorParameterValue(TEXT("Color"), Skin);
+        SkinMaterial->SetVectorParameterValue(TEXT("BruiseColor"),
+            FLinearColor(SkinHSV.R + 12.f, FMath::Min(SkinHSV.G + 0.2f, 1.f), SkinHSV.B * 0.38f).HSVToLinearRGB());
+        SkinMaterial->SetVectorParameterValue(TEXT("VeinColor"),
+            FLinearColor(Rng.FRandRange(250.f, 275.f), 0.65f, 0.09f).HSVToLinearRGB());
+        SkinMaterial->SetVectorParameterValue(TEXT("SubsurfaceColor"), Growth * 0.8f);
+    }
+    if (GrowthMaterial)
+    {
+        GrowthMaterial->SetVectorParameterValue(TEXT("Color"), Growth);
+        GrowthMaterial->SetVectorParameterValue(TEXT("SubsurfaceColor"), Growth);
+    }
     if (MetalMaterial) MetalMaterial->SetVectorParameterValue(TEXT("Color"), MetalColor);
 
     const float Fatness = Rng.FRandRange(Mutations.BodyFatness.X, Mutations.BodyFatness.Y);
@@ -331,6 +364,7 @@ void AProceduralZombie::RebuildBody()
     }
 
     AddGrowths(Arch, Rng);
+    AddHandsFeetFace(Arch, Rng);
 
     // Machine plates embedded in the torso of robot-stuffed corpses.
     if (bRobot)
@@ -451,7 +485,7 @@ void AProceduralZombie::BuildPart(int32 Index, const FLimbPartSpec& Spec, FRando
     PM->SetCastShadow(true);
     PM->RegisterComponent();
     PM->CreateMeshSection(0, State.Mesh.Vertices, State.Mesh.Triangles, State.Mesh.Normals,
-        State.Mesh.UVs, TArray<FColor>(), State.Mesh.Tangents, false);
+        State.Mesh.UVs, State.Mesh.Colors, State.Mesh.Tangents, false);
     PM->SetMaterial(0, GetMaterial(bMechanical ? ELimbMaterial::Metal : ELimbMaterial::Skin));
     State.MeshComp = PM;
 
@@ -555,24 +589,191 @@ void AProceduralZombie::AddGrowths(const FZombieArchetype& Arch, FRandomStream& 
     }
 }
 
-void AProceduralZombie::AddDecor(int32 OwnerPart, const FLimbShape& Shape, ELimbMaterial Material)
+void AProceduralZombie::AddDecor(int32 OwnerPart, const FLimbShape& InShape, ELimbMaterial Material, FName Bone)
 {
     if (!PartState.IsValidIndex(OwnerPart) || !PartState[OwnerPart].MeshComp) return;
+
+    FLimbShape Shape = InShape;
+    Shape.Style = Material == ELimbMaterial::Growth ? FLimbShape::EStyle::Growth
+                : Material == ELimbMaterial::Metal  ? FLimbShape::EStyle::Metal
+                : FLimbShape::EStyle::Flesh;
 
     FLimbDecorRuntime& D = Decor.AddDefaulted_GetRef();
     D.OwnerPart = OwnerPart;
     D.Material = Material;
     FLimbMeshGenerator::BuildTube(Shape, D.Mesh);
 
-    // Same bone as its host part, so its vertices are in that bone's space too.
+    // Rides on Bone (default: the host part's bone), and its vertices are in that bone's space.
     UProceduralMeshComponent* PM = NewObject<UProceduralMeshComponent>(this);
-    PM->SetupAttachment(GetMesh(), PartState[OwnerPart].Spec.StartBone);
+    PM->SetupAttachment(GetMesh(), Bone.IsNone() ? PartState[OwnerPart].Spec.StartBone : Bone);
     PM->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     PM->RegisterComponent();
     PM->CreateMeshSection(0, D.Mesh.Vertices, D.Mesh.Triangles, D.Mesh.Normals, D.Mesh.UVs,
-        TArray<FColor>(), D.Mesh.Tangents, false);
+        D.Mesh.Colors, D.Mesh.Tangents, false);
     PM->SetMaterial(0, GetMaterial(Material));
     D.MeshComp = PM;
+}
+
+int32 AProceduralZombie::PartIndex(ELimbPart Part) const
+{
+    return Parts.IndexOfByPredicate([Part](const FLimbPartSpec& S) { return S.Part == Part; });
+}
+
+FTransform AProceduralZombie::RefPoseCS(int32 Bone) const
+{
+    const FReferenceSkeleton& RefSkel = GetMesh()->GetSkeletalMeshAsset()->GetRefSkeleton();
+    FTransform T = FTransform::Identity;
+    while (Bone != INDEX_NONE)
+    {
+        T = T * RefSkel.GetRefBonePose()[Bone];
+        Bone = RefSkel.GetParentIndex(Bone);
+    }
+    return T;
+}
+
+bool AProceduralZombie::BoneLocalPoint(FName From, FName To, FVector& Out) const
+{
+    const FReferenceSkeleton& RefSkel = GetMesh()->GetSkeletalMeshAsset()->GetRefSkeleton();
+    const int32 A = RefSkel.FindBoneIndex(From);
+    const int32 B = RefSkel.FindBoneIndex(To);
+    if (A == INDEX_NONE || B == INDEX_NONE) return false;
+    Out = RefPoseCS(A).InverseTransformPosition(RefPoseCS(B).GetLocation());
+    return true;
+}
+
+void AProceduralZombie::AddHandsFeetFace(const FZombieArchetype& Arch, FRandomStream& Rng)
+{
+    const FReferenceSkeleton& RefSkel = GetMesh()->GetSkeletalMeshAsset()->GetRefSkeleton();
+
+    for (int32 SideIdx = 0; SideIdx < 2; ++SideIdx)
+    {
+        const TCHAR* Sfx = SideIdx == 0 ? TEXT("_l") : TEXT("_r");
+        auto B = [Sfx](const TCHAR* Name) { return FName(*(FString(Name) + Sfx)); };
+
+        // ---- Hand: palm + five fingers on the real finger bones (so they animate).
+        const int32 Fore = PartIndex(SideIdx == 0 ? ELimbPart::LowerArmL : ELimbPart::LowerArmR);
+        if (Arch.bHasFingers && PartState.IsValidIndex(Fore) && PartState[Fore].bAttached)
+        {
+            const FLimbPartRuntime& F = PartState[Fore];
+            const float Scale = Parts[Fore].StartRadius > 0.f ? F.Spec.StartRadius / Parts[Fore].StartRadius : 1.f;
+            const ELimbMaterial Mat = F.bMechanical ? ELimbMaterial::Metal : ELimbMaterial::Skin;
+
+            FVector KnuckleMid, IndexBase, PinkyBase;
+            if (BoneLocalPoint(B(TEXT("hand")), B(TEXT("middle_01")), KnuckleMid) &&
+                BoneLocalPoint(B(TEXT("hand")), B(TEXT("index_01")), IndexBase) &&
+                BoneLocalPoint(B(TEXT("hand")), B(TEXT("pinky_01")), PinkyBase))
+            {
+                FLimbShape Palm;
+                Palm.Start = -KnuckleMid.GetSafeNormal() * 1.5f;
+                Palm.End = KnuckleMid * 1.05f;
+                Palm.WideAxis = IndexBase - PinkyBase;
+                Palm.Width = 1.5f; Palm.Depth = 0.6f;
+                Palm.StartRadius = 3.2f * Scale; Palm.EndRadius = 3.0f * Scale;
+                Palm.Bulge = 0.4f * Scale; Palm.Lumpiness = 0.35f; Palm.CapExponent = 0.4f;
+                Palm.Rings = 12; Palm.Sides = 14; Palm.NoiseSeed = Rng.RandRange(0, 100000);
+                Palm.bMechanical = F.bMechanical; Palm.Segments = 1;
+                AddDecor(Fore, Palm, Mat, B(TEXT("hand")));
+            }
+
+            static const TCHAR* Fingers[] = { TEXT("index"), TEXT("middle"), TEXT("ring"), TEXT("pinky"), TEXT("thumb") };
+            for (const TCHAR* Finger : Fingers)
+            {
+                const FName Base = B(*(FString(Finger) + TEXT("_01")));
+                FVector Tip;
+                if (!BoneLocalPoint(Base, B(*(FString(Finger) + TEXT("_03"))), Tip)) continue;
+
+                const bool bThumb = FCString::Strcmp(Finger, TEXT("thumb")) == 0;
+                const FVector Dir = Tip.GetSafeNormal();
+                FLimbShape Digit;
+                Digit.Start = -Dir * 0.8f;
+                Digit.End = Tip + Dir * (1.6f + Arch.ClawLength * Rng.FRandRange(0.7f, 1.3f));
+                Digit.BendOffset = RandomPerpendicular(Rng, Dir) * Rng.FRandRange(0.f, 1.2f);
+                Digit.StartRadius = (bThumb ? 1.45f : 1.1f) * Scale;
+                Digit.EndRadius = 0.45f * Scale;
+                Digit.Bulge = 0.2f * Scale; Digit.Lumpiness = 0.18f; Digit.Pinch = 0.12f; Digit.CapExponent = 0.3f;
+                Digit.Rings = 12; Digit.Sides = 8; Digit.NoiseSeed = Rng.RandRange(0, 100000);
+                Digit.bMechanical = F.bMechanical; Digit.Segments = 3;
+                AddDecor(Fore, Digit, Mat, Base);
+            }
+        }
+
+        // ---- Foot: flattened, toes spread left-right.
+        const int32 Calf = PartIndex(SideIdx == 0 ? ELimbPart::CalfL : ELimbPart::CalfR);
+        FVector Ball;
+        if (PartState.IsValidIndex(Calf) && PartState[Calf].bAttached && BoneLocalPoint(B(TEXT("foot")), B(TEXT("ball")), Ball))
+        {
+            const FLimbPartRuntime& C = PartState[Calf];
+            const float Scale = Parts[Calf].StartRadius > 0.f ? C.Spec.StartRadius / Parts[Calf].StartRadius : 1.f;
+            const int32 FootBone = RefSkel.FindBoneIndex(B(TEXT("foot")));
+            FLimbShape Foot;
+            Foot.Start = -Ball.GetSafeNormal() * 3.f;
+            Foot.End = Ball + Ball.GetSafeNormal() * 7.f;
+            Foot.WideAxis = RefPoseCS(FootBone).InverseTransformVectorNoScale(FVector(1.f, 0.f, 0.f));   // body left-right
+            Foot.Width = 1.35f; Foot.Depth = 0.65f;
+            Foot.StartRadius = 4.2f * Scale; Foot.EndRadius = 3.0f * Scale;
+            Foot.Bulge = 0.5f; Foot.Lumpiness = 0.5f; Foot.CapExponent = 0.35f;
+            Foot.Rings = 14; Foot.Sides = 14; Foot.NoiseSeed = Rng.RandRange(0, 100000);
+            Foot.bMechanical = C.bMechanical; Foot.Segments = 2;
+            AddDecor(Calf, Foot, C.bMechanical ? ELimbMaterial::Metal : ELimbMaterial::Skin, B(TEXT("foot")));
+        }
+    }
+
+    // ---- Face: two glowing eyes on the front of the head.
+    const int32 HeadIdx = PartIndex(ELimbPart::Head);
+    const int32 HeadBone = RefSkel.FindBoneIndex(Parts.IsValidIndex(HeadIdx) ? Parts[HeadIdx].StartBone : NAME_None);
+    if (PartState.IsValidIndex(HeadIdx) && PartState[HeadIdx].bAttached && HeadBone != INDEX_NONE)
+    {
+        const FLimbShape& Head = PartState[HeadIdx].Shape;
+        // The Mannequin faces +Y in component space.
+        const FVector Face = RefPoseCS(HeadBone).InverseTransformVectorNoScale(FVector(0.f, 1.f, 0.f)).GetSafeNormal();
+        const float T = 0.52f;
+        const FVector Spine = FLimbMeshGenerator::SpineDirection(Head, T);
+        const FVector Front = FVector::VectorPlaneProject(Face, Spine).GetSafeNormal();
+        const FVector Across = FVector::CrossProduct(Spine, Front).GetSafeNormal();
+        const float R = FLimbMeshGenerator::RadiusAt(Head, T);
+        const FVector Mid = FLimbMeshGenerator::SpinePoint(Head, T) + Front * R * 0.8f;
+        const float EyeR = FMath::Clamp(R * 0.14f, 0.8f, 1.6f);
+
+        for (int32 Eye = -1; Eye <= 1; Eye += 2)
+        {
+            const FVector P = Mid + Across * (R * 0.36f * Eye);
+            FLimbShape Orb;
+            Orb.Start = P - Front * EyeR * 0.6f;
+            Orb.End = P + Front * EyeR * 1.0f;
+            Orb.StartRadius = Orb.EndRadius = EyeR * 0.7f;
+            Orb.Bulge = EyeR * 0.4f; Orb.CapExponent = 0.6f; Orb.Rings = 8; Orb.Sides = 10;
+            Orb.NoiseSeed = Rng.RandRange(0, 100000);
+            AddDecor(HeadIdx, Orb, ELimbMaterial::Growth);
+        }
+    }
+}
+
+void AProceduralZombie::MakeWound(const FLimbPartRuntime& P, bool bOnBody, FLimbShape& Cap, FLimbShape& BoneStub) const
+{
+    // In the severed part's start-bone space; the joint is at the origin.
+    const FVector Axis = (P.Shape.End - P.Shape.Start).GetSafeNormal();
+    const float R = P.Shape.StartRadius * 0.5f * (P.Shape.Width + P.Shape.Depth);
+    const float Out = bOnBody ? 1.f : -1.f;   // which way is "out of the wound"
+
+    Cap = FLimbShape();
+    Cap.Start = -Axis * Out * 1.5f;
+    Cap.End = Axis * Out * 2.5f;
+    Cap.StartRadius = Cap.EndRadius = R * 1.05f;
+    Cap.Bulge = 0.6f; Cap.Lumpiness = 0.7f; Cap.CapExponent = 0.12f;
+    Cap.Rings = 6; Cap.Sides = 18; Cap.NoiseSeed = FMath::Rand();
+
+    BoneStub = FLimbShape();
+    BoneStub.Start = -Axis * Out * 1.f;
+    BoneStub.End = Axis * Out * FMath::Max(R * 1.1f, 5.f);
+    BoneStub.StartRadius = R * 0.3f; BoneStub.EndRadius = R * 0.24f;
+    BoneStub.Bulge = R * 0.08f; BoneStub.Lumpiness = 0.15f; BoneStub.CapExponent = 0.6f;
+    BoneStub.Rings = 10; BoneStub.Sides = 10; BoneStub.NoiseSeed = FMath::Rand();
+    if (P.bMechanical)
+    {
+        // Machine joints tear into a ragged metal rod instead of bone.
+        Cap.bMechanical = BoneStub.bMechanical = true;
+        Cap.Segments = BoneStub.Segments = 1;
+    }
 }
 
 UMaterialInterface* AProceduralZombie::GetMaterial(ELimbMaterial Kind) const
@@ -581,6 +782,7 @@ UMaterialInterface* AProceduralZombie::GetMaterial(ELimbMaterial Kind) const
     {
     case ELimbMaterial::Growth: return GrowthMaterial ? GrowthMaterial.Get() : BaseMaterial.Get();
     case ELimbMaterial::Metal:  return MetalMaterial ? MetalMaterial.Get() : BaseMaterial.Get();
+    case ELimbMaterial::Bone:   return BoneMaterial ? BoneMaterial.Get() : BaseMaterial.Get();
     default:                    return SkinMaterial ? SkinMaterial.Get() : BaseMaterial.Get();
     }
 }
@@ -748,6 +950,30 @@ void AProceduralZombie::SeverPart(int32 Index, const FVector& HitLocation)
         if (!Take.Contains(D.OwnerPart) || !D.MeshComp || !D.MeshComp->IsVisible()) continue;
         CopyInto(D.Mesh, D.MeshComp, GetMaterial(D.Material));
         D.MeshComp->SetVisibility(false);
+    }
+
+    // Wounds: infected cap + bone (or torn metal) on the limb's root...
+    FLimbShape CapShape, BoneShape;
+    const ELimbMaterial CapMat = Root.bMechanical ? ELimbMaterial::Metal : ELimbMaterial::Growth;
+    const ELimbMaterial BoneMat = Root.bMechanical ? ELimbMaterial::Metal : ELimbMaterial::Bone;
+    if (Limb)
+    {
+        MakeWound(Root, /*bOnBody=*/false, CapShape, BoneShape);
+        CapShape.Style = Root.bMechanical ? FLimbShape::EStyle::Metal : FLimbShape::EStyle::Growth;
+        FLimbMesh WoundMesh;
+        FLimbMeshGenerator::BuildTube(CapShape, WoundMesh);
+        Limb->AddPartMesh(WoundMesh, GetMaterial(CapMat));
+        FLimbMeshGenerator::BuildTube(BoneShape, WoundMesh);
+        Limb->AddPartMesh(WoundMesh, GetMaterial(BoneMat));
+    }
+
+    // ...and a stump on the body, riding on the severed part's (still animated) bone.
+    const int32 ParentIdx = PartIndex(Root.Spec.ParentPart);
+    if (PartState.IsValidIndex(ParentIdx) && PartState[ParentIdx].bAttached)
+    {
+        MakeWound(Root, /*bOnBody=*/true, CapShape, BoneShape);
+        AddDecor(ParentIdx, CapShape, CapMat, Root.Spec.StartBone);
+        AddDecor(ParentIdx, BoneShape, BoneMat, Root.Spec.StartBone);
     }
 
     if (Limb)

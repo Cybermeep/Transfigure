@@ -44,9 +44,11 @@ float FLimbMeshGenerator::RadiusAt(const FLimbShape& S, float T)
     return ProfileRadius(S, T) * 0.5f * (S.Width + S.Depth);
 }
 
-void FLimbMeshGenerator::BuildTube(const FLimbShape& S, FLimbMesh& Out)
+void FLimbMeshGenerator::BuildTube(const FLimbShape& InShape, FLimbMesh& Out)
 {
     Out = FLimbMesh();
+    FLimbShape S = InShape;
+    if (S.bMechanical) S.Style = FLimbShape::EStyle::Metal;
     const int32 Rings = FMath::Max(S.bMechanical ? S.Segments * 6 : S.Rings, 3);
     const int32 Sides = FMath::Max(S.bMechanical ? 6 : S.Sides, 3);
     const FVector SeedOffset(S.NoiseSeed * 0.731f, S.NoiseSeed * 1.317f, S.NoiseSeed * 0.193f);
@@ -82,12 +84,51 @@ void FLimbMeshGenerator::BuildTube(const FLimbShape& S, FLimbMesh& Out)
 
             // Seamless noise: sample 3D Perlin on a circle, moving along the spine.
             const FVector NoisePos = FVector(FMath::Cos(A), FMath::Sin(A), T * 3.f) * 1.7f + SeedOffset;
-            const float Lump = S.bMechanical ? 0.f : S.Lumpiness * FMath::PerlinNoise3D(NoisePos);
+            const float Coarse = FMath::PerlinNoise3D(NoisePos);
+            // Second, finer octave: wrinkles and sagging skin.
+            const float Fine = FMath::PerlinNoise3D(NoisePos * 3.3f + FVector(17.f));
+            const float Lump = S.bMechanical ? 0.f : S.Lumpiness * (Coarse + S.Wrinkle * Fine);
 
             const float Radius = FMath::Max(0.f, (BaseRadius + Lump) * Cap);
             const FVector Offset = Normal * (FMath::Cos(A) * S.Width) + Binormal * (FMath::Sin(A) * S.Depth);
-            Out.Vertices.Add(Center + Offset * Radius);
+            const FVector Pos = Center + Offset * Radius;
+            Out.Vertices.Add(Pos);
             Out.UVs.Add(FVector2D(static_cast<float>(Side) / Sides, T));
+
+            // Vertex colours: noise in the part's OWN space, so patterns stick to the body as it moves.
+            const FVector P = Pos * 0.09f + SeedOffset;
+            float Vein = 0.f, Mottle = 0.f, Crease = 0.f;
+            switch (S.Style)
+            {
+            case FLimbShape::EStyle::Metal:
+            {
+                // Rust patches (G) and dark grime in the rib grooves (B).
+                const float Rust = FMath::PerlinNoise3D(P * 1.4f) * 0.5f + 0.5f;
+                Mottle = FMath::Clamp((Rust - 0.58f) * 4.f, 0.f, 1.f);
+                Crease = (FMath::Frac(T * FMath::Max(S.Segments, 1)) < 0.16f) ? 0.6f : 0.f;
+                break;
+            }
+            case FLimbShape::EStyle::Growth:
+                // G = pulse phase (desyncs neighbouring sacs), B = darker toward the base.
+                Mottle = FMath::Frac(S.NoiseSeed * 0.0137f + (FMath::PerlinNoise3D(P) * 0.15f));
+                Crease = FMath::Clamp(1.f - T * 2.f, 0.f, 1.f) * 0.6f;
+                break;
+            default:
+            {
+                // Veins: thin ridges where a noise field crosses zero.
+                const float V = FMath::Abs(FMath::PerlinNoise3D(P * 2.2f + FVector(5.f)));
+                Vein = FMath::Clamp(1.f - V / 0.055f, 0.f, 1.f) * 0.85f;
+                // Mottling / bruises.
+                Mottle = FMath::Clamp(FMath::PerlinNoise3D(P * 0.7f) * 0.9f + 0.5f, 0.f, 1.f);
+                // Creases: dents in the surface and the pinched joints.
+                const float Dent = S.Lumpiness > 0.f ? FMath::Clamp(-Lump / S.Lumpiness, 0.f, 1.f) : 0.f;
+                const float Joint = FMath::Exp(-FMath::Square(T / 0.1f)) + FMath::Exp(-FMath::Square((1.f - T) / 0.1f));
+                Crease = FMath::Clamp(Dent * 0.7f + Joint * 0.5f, 0.f, 1.f);
+                break;
+            }
+            }
+            Out.Colors.Add(FColor(
+                static_cast<uint8>(Vein * 255.f), static_cast<uint8>(Mottle * 255.f), static_cast<uint8>(Crease * 255.f), 255));
         }
     }
 
@@ -134,6 +175,8 @@ FLimbShape FLimbMeshGenerator::MakeShape(const FLimbPartSpec& Spec, const FVecto
     S.Bulge = FMath::Max(0.f, Spec.Bulge + Rng.FRandRange(M.BulgeOffset.X, M.BulgeOffset.Y));
     S.Lumpiness = Rng.FRandRange(M.Lumpiness.X, M.Lumpiness.Y);
     S.NoiseSeed = Rng.RandRange(0, 100000);
+    S.Rings = 22;
+    S.Sides = 18;
 
     // Extend past both joints a little so neighbouring parts overlap and hide the seams.
     S.Start = LocalStart - Axis * S.StartRadius * 0.6f;

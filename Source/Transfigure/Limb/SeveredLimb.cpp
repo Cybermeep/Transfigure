@@ -22,7 +22,7 @@ void ASeveredLimb::AddPartMesh(const FLimbMesh& PartMesh, UMaterialInterface* Ma
 {
     const int32 Section = NextSection++;
     Mesh->CreateMeshSection(Section, PartMesh.Vertices, PartMesh.Triangles, PartMesh.Normals,
-        PartMesh.UVs, TArray<FColor>(), PartMesh.Tangents, false);
+        PartMesh.UVs, PartMesh.Colors, PartMesh.Tangents, false);
     if (Material) Mesh->SetMaterial(Section, Material);
 
     // Convex hull for physics (every few vertices is plenty for a hull).
