@@ -177,7 +177,26 @@ bool UTransfigurationCastingComponent::PerformAimTrace(FHitResult& OutHit) const
     Objects.AddObjectTypesToQuery(ECC_WorldStatic);
     Objects.AddObjectTypesToQuery(ECC_WorldDynamic);
 
-    return GetWorld()->LineTraceSingleByObjectType(OutHit, Start, TraceEnd, Objects, Params);
+    // An object query also returns invisible trigger shapes (enemy pod volumes, launch pad
+    // zones, zombie hit zones): skip anything that doesn't actually block, or the sigil
+    // sticks to thin air.
+    TArray<FHitResult> Hits;
+    GetWorld()->LineTraceMultiByObjectType(Hits, Start, TraceEnd, Objects, Params);
+    const FHitResult* Best = nullptr;
+    for (const FHitResult& H : Hits)
+    {
+        const UPrimitiveComponent* C = H.GetComponent();
+        if (!C || C->GetCollisionResponseToChannel(ECC_Visibility) != ECR_Block) continue;
+        if (!Best || H.Distance < Best->Distance) Best = &H;
+    }
+    if (!Best)
+    {
+        OutHit = FHitResult();
+        return false;
+    }
+    OutHit = *Best;
+    OutHit.bBlockingHit = true;
+    return true;
 }
 
 bool UTransfigurationCastingComponent::CanAffordSpell(FName SpellID) const
@@ -334,6 +353,7 @@ bool UTransfigurationCastingComponent::CastAtAim(FName SpellID)
     if (!CurrentAimHit.bBlockingHit)
     {
         UE_LOG(LogTemp, Warning, TEXT("[TM] Sigil: no surface at the crosshair (within %.0f)"), MaxPlacementDistance);
+        Toast(FString::Printf(TEXT("No surface in range (%.0f m)"), MaxPlacementDistance / 100.f), FLinearColor(0.75f, 0.75f, 0.8f));
         CancelDrawMode();
         return false;
     }

@@ -22,8 +22,8 @@
 
 namespace
 {
-    const FLinearColor Panel(0.02f, 0.02f, 0.05f, 0.62f);
-    const FLinearColor Dim(0.75f, 0.78f, 0.85f, 1.f);
+    const FLinearColor HudPanel(0.02f, 0.02f, 0.05f, 0.62f);
+    const FLinearColor HudDim(0.75f, 0.78f, 0.85f, 1.f);
 
     FString ArchetypeName(const UTransfigurationDefinition* Def)
     {
@@ -254,7 +254,7 @@ void ATMHUD::DrawToasts()
 void ATMHUD::DrawPlayerStatus(const ATMCharacter* Char)
 {
     const float X = 40.f, Y = Canvas->ClipY - 96.f, W = 300.f;
-    DrawRect(Panel, X - 12.f, Y - 34.f, W + 24.f, 92.f);
+    DrawRect(HudPanel, X - 12.f, Y - 34.f, W + 24.f, 92.f);
     const float HealthFill = Char->GetMaxHealth() > 0.f ? Char->GetHealth() / Char->GetMaxHealth() : 0.f;
     DrawBar(X, Y, W, 16.f, HealthFill, FLinearColor(0.85f, 0.18f, 0.2f));
     DrawLeftText(FString::Printf(TEXT("%.0f / %.0f"), Char->GetHealth(), Char->GetMaxHealth()), X + 6.f, Y - 1.f, FLinearColor::White, 0.85f);
@@ -290,7 +290,7 @@ void ATMHUD::DrawSpellPanel(const ATMCharacter* Char)
 
     const float W = 330.f, H = 92.f;
     const float X = Canvas->ClipX - W - 40.f, Y = Canvas->ClipY - H - 30.f;
-    DrawRect(Panel, X, Y, W, H);
+    DrawRect(HudPanel, X, Y, W, H);
     DrawRect(Color, X, Y, 6.f, H);
     DrawLeftText(DisplayNameOf(Def, Id), X + 18.f, Y + 8.f, Color, 1.35f);
 
@@ -299,12 +299,12 @@ void ATMHUD::DrawSpellPanel(const ATMCharacter* Char)
     const bool bAfford = Char->HasEnoughMana(Cost);
     FString Line = FString::Printf(TEXT("%.0f mana"), Cost);
     if (Def) Line += FString::Printf(TEXT("   %s"), *UEnum::GetDisplayValueAsText(Def->TriggerType).ToString());
-    DrawLeftText(Line, X + 18.f, Y + 40.f, bAfford ? Dim : FLinearColor(1.f, 0.35f, 0.3f), 0.9f);
+    DrawLeftText(Line, X + 18.f, Y + 40.f, bAfford ? HudDim : FLinearColor(1.f, 0.35f, 0.3f), 0.9f);
     if (Cooldown > 0.f && Def && Def->CooldownDuration > 0.f)
     {
         DrawBar(X + 18.f, Y + 62.f, W - 36.f, 6.f, 1.f - Cooldown / Def->CooldownDuration, Color * 0.8f);
     }
-    DrawLeftText(FString::Printf(TEXT("Sigils %d/%d"), Casting->GetActiveSigilCount(), Casting->MaxActiveSigils), X + W - 110.f, Y + 8.f, Dim, 0.85f);
+    DrawLeftText(FString::Printf(TEXT("Sigils %d/%d"), Casting->GetActiveSigilCount(), Casting->MaxActiveSigils), X + W - 110.f, Y + 8.f, HudDim, 0.85f);
     DrawLeftText(TEXT("Q place   hold Q wheel   B spellbook"), X + 18.f, Y + H - 22.f, FLinearColor(0.6f, 0.6f, 0.65f), 0.75f);
 }
 
@@ -410,7 +410,7 @@ void ATMHUD::DrawSpellWheel(const ATMCharacter* Char, const FVector2D& Center)
         }
         DrawCenteredText(DisplayNameOf(Def, Spells[i]), FVector2D(Pos.X, Pos.Y - 9.f), bHi ? Color : Color * 0.9f, bHi ? 1.25f : 1.05f);
         const FString Sub = Cooldown > 0.f ? FString::Printf(TEXT("%.1fs"), Cooldown) : FString::Printf(TEXT("%.0f mana"), Cost);
-        DrawCenteredText(Sub, FVector2D(Pos.X, Pos.Y + 15.f), bAfford ? Dim : FLinearColor(1.f, 0.35f, 0.3f), 0.8f);
+        DrawCenteredText(Sub, FVector2D(Pos.X, Pos.Y + 15.f), bAfford ? HudDim : FLinearColor(1.f, 0.35f, 0.3f), 0.8f);
     }
 
     const FVector2D Cursor = Char->GetSpellWheelCursor();
@@ -422,7 +422,7 @@ void ATMHUD::DrawSpellWheel(const ATMCharacter* Char, const FVector2D& Center)
             float Y = Center.Y - 30.f;
             for (const FString& L : WrapText(Def->Description.ToString(), Radius * 0.9f, 0.85f))
             {
-                DrawCenteredText(L, FVector2D(Center.X, Y), Dim, 0.85f);
+                DrawCenteredText(L, FVector2D(Center.X, Y), HudDim, 0.85f);
                 Y += 20.f;
             }
         }
@@ -439,7 +439,7 @@ void ATMHUD::DrawSpellDetails(const UTransfigurationDefinition* Def, float X, fl
     DrawLeftText(DisplayNameOf(Def, Def->SpellID), X, Y, C, 1.6f);
     Y += 38.f;
     DrawLeftText(FString::Printf(TEXT("%s  -  %s"), *USpellLibrary::GetElementName(Def->bIsHealingSigil || Def->bIsBuffSigil ? ETransfigurationElement::None : Def->Element),
-        *ArchetypeName(Def)), X, Y, Dim, 0.95f);
+        *ArchetypeName(Def)), X, Y, HudDim, 0.95f);
     Y += 30.f;
     for (const FString& L : WrapText(Def->Description.ToString(), W, 0.9f))
     {
@@ -450,7 +450,7 @@ void ATMHUD::DrawSpellDetails(const UTransfigurationDefinition* Def, float X, fl
 
     auto Stat = [&](const FString& Name, const FString& Value)
     {
-        DrawLeftText(Name, X, Y, Dim, 0.85f);
+        DrawLeftText(Name, X, Y, HudDim, 0.85f);
         DrawLeftText(Value, X + 140.f, Y, FLinearColor::White, 0.85f);
         Y += 21.f;
     };
@@ -474,7 +474,7 @@ void ATMHUD::DrawSpellbook(ATMCharacter* Char)
     DrawRect(FLinearColor(0.01f, 0.01f, 0.03f, 0.82f), 0.f, 0.f, W, H);
     DrawLeftText(TEXT("SPELLBOOK"), 50.f, 34.f, FLinearColor(0.9f, 0.85f, 1.f), 2.f);
     DrawLeftText(TEXT("Click a spell, then a wheel slot below to put it there.  Click a slot with nothing picked to clear it.  B to close."),
-        50.f, 82.f, Dim, 0.85f);
+        50.f, 82.f, HudDim, 0.85f);
     if (!Casting) return;
 
     float MouseX = 0.f, MouseY = 0.f;
@@ -531,7 +531,7 @@ void ATMHUD::DrawSpellbook(ATMCharacter* Char)
     // Details of the hovered (or picked) spell.
     const FName Shown = !BookHover.IsNone() ? BookHover : BookSelected;
     const float DX = W * 0.68f, DW = W - DX - 50.f;
-    DrawRect(Panel, DX - 16.f, GridY - 10.f, DW + 32.f, H * 0.62f);
+    DrawRect(HudPanel, DX - 16.f, GridY - 10.f, DW + 32.f, H * 0.62f);
     if (!Shown.IsNone())
     {
         DrawSpellDetails(Casting->GetSpellDefinition(Shown), DX, GridY, DW);
@@ -541,26 +541,26 @@ void ATMHUD::DrawSpellbook(ATMCharacter* Char)
         // Combos: place two sigils close together and set one off.
         const FLinearColor Unknown(0.5f, 0.5f, 0.55f);
         DrawLeftText(TEXT("COMBOS"), DX, GridY, FLinearColor(0.9f, 0.85f, 1.f), 1.2f);
-        DrawLeftText(TEXT("Place two sigils close together, then set one off."), DX, GridY + 28.f, Dim, 0.8f);
+        DrawLeftText(TEXT("Place two sigils close together, then set one off."), DX, GridY + 28.f, HudDim, 0.8f);
         float Y = GridY + 58.f;
         for (const UTransfigurationDefinition* C : Casting->GetComboSpells())
         {
             const bool bFound = Casting->DiscoveredCombos.Contains(C->SpellID);
             DrawLeftText(FString::Printf(TEXT("%s + %s"), *USpellLibrary::GetElementName(C->ComboElementA),
-                *USpellLibrary::GetElementName(C->ComboElementB)), DX, Y, Dim, 0.8f);
+                *USpellLibrary::GetElementName(C->ComboElementB)), DX, Y, HudDim, 0.8f);
             DrawLeftText(bFound ? C->DisplayName.ToString() : FString(TEXT("???")), DX + 170.f, Y, bFound ? C->GetSpellColor() : Unknown, 0.8f);
             Y += 20.f;
         }
         const bool bOver = Casting->DiscoveredCombos.Contains(FName(TEXT("Overcharge")));
         const bool bAmp = Casting->DiscoveredCombos.Contains(FName(TEXT("Amplify")));
-        DrawLeftText(TEXT("Same element twice"), DX, Y, Dim, 0.8f);
+        DrawLeftText(TEXT("Same element twice"), DX, Y, HudDim, 0.8f);
         DrawLeftText(bOver ? TEXT("Overcharge") : TEXT("???"), DX + 170.f, Y, bOver ? FLinearColor::White : Unknown, 0.8f);
         Y += 20.f;
-        DrawLeftText(TEXT("Arcane + any"), DX, Y, Dim, 0.8f);
+        DrawLeftText(TEXT("Arcane + any"), DX, Y, HudDim, 0.8f);
         DrawLeftText(bAmp ? TEXT("Amplify") : TEXT("???"), DX + 170.f, Y,
             bAmp ? USpellLibrary::GetElementColor(ETransfigurationElement::Arcane) : Unknown, 0.8f);
         Y += 30.f;
-        DrawLeftText(TEXT("Hover a spell to read about it."), DX, Y, Dim, 0.8f);
+        DrawLeftText(TEXT("Hover a spell to read about it."), DX, Y, HudDim, 0.8f);
     }
 
     // The wheel's 8 slots.
@@ -578,7 +578,7 @@ void ATMHUD::DrawSpellbook(ATMCharacter* Char)
         const bool bHover = Rect.IsInside(Mouse);
         DrawRect(FLinearColor(0.03f, 0.03f, 0.06f, 0.9f), X, SY, SW, SH);
         DrawFrame(X, SY, SW, SH, bHover ? FLinearColor(1.f, 0.9f, 0.3f) : C * 0.7f, bHover ? 3.f : 2.f);
-        DrawLeftText(FString::Printf(TEXT("%d"), s + 1), X + 6.f, SY + 4.f, Dim, 0.7f);
+        DrawLeftText(FString::Printf(TEXT("%d"), s + 1), X + 6.f, SY + 4.f, HudDim, 0.7f);
         DrawCenteredText(Def ? DisplayNameOf(Def, Id) : TEXT("empty"), FVector2D(X + SW * 0.5f, SY + SH * 0.55f), C, 0.9f);
         BookHits.Add({ Rect, true, Id, s });
     }
