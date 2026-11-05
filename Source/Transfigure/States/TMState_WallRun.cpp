@@ -157,10 +157,11 @@ void TMState_WallRun::Tick(float DeltaTime)
             RunSpeed = FMath::Min(RunSpeed + Grapple->GluedPullAcceleration * DeltaTime, FMath::Max(RunSpeed, Grapple->MaxMomentumSpeed));
         }
 
-        // Holding Tab + S on the wall: dig in and charge a slingshot.
+        // Holding Tab + S: charge a slingshot - only if the anchor is on a floor or ceiling
+        // (a wall anchor never charges, so S can't bleed your speed mid-run).
         const FVector Input = FVector::VectorPlaneProject(Owner->GetLastMovementInputVector(), Up);
         const FVector Facing = URingFrameUtils::StripVertical(Owner->GetActorForwardVector(), Up).GetSafeNormal();
-        if (FVector::DotProduct(Input.GetClampedToMaxSize(1.f), Facing) < -0.5f)
+        if (Grapple->CanSlingshot() && FVector::DotProduct(Input.GetClampedToMaxSize(1.f), Facing) < -0.5f)
         {
             Grapple->StartSurfaceCharge();
             Owner->TransitionTo<TMState_Fall>();

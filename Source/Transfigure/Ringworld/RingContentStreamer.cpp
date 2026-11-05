@@ -480,6 +480,34 @@ void ARingContentStreamer::PlanCell(FCell& Cell)
         }
     }
 
+    // Travel spires: one or two tall, thin anchors in every cell whatever the biome's density,
+    // so there's nearly always something within grapple range (150 m) on open ground.
+    const int32 Spires = Rng.FRand() < 0.55f ? 2 : 1;
+    for (int32 i = 0; i < Spires; ++i)
+    {
+        const FVector S = RandIn(Half * 0.85f);
+        const float Tall = Rng.FRandRange(18.f, 38.f) * H;
+        const float Yaw = Rng.FRandRange(0.f, 360.f);
+        const float Lean = Rng.FRandRange(0.f, 1.f);
+        switch (Region.Biome)
+        {
+        case ERingBiome::Ember:   Place(false, S, Yaw, FVector(350.f, 350.f, Tall), 2, Lean * 8.f); break;                  // basalt column
+        case ERingBiome::Frost:   Place(true, S, Yaw, FVector(180.f, 180.f, Tall), 1, Lean * 14.f, Lean * 6.f); break;    // ice needle
+        case ERingBiome::Storm:   Place(true, S, 0.f, FVector(140.f, 140.f, Tall * 1.2f), 2); break;                      // conductor rod
+        case ERingBiome::Verdant:                                                                                         // tree with a crown
+        {
+            const double Base = BaseAt(S, 0.f, 150.f, 150.f);
+            Place(true, S, 0.f, FVector(260.f, 260.f, Tall), 0, 0.f, 0.f, Base);
+            Place(false, S + FVector(0.f, 0.f, Tall), Yaw, FVector(1400.f, 1400.f, 250.f), 1, 0.f, 0.f, Base);
+            break;
+        }
+        case ERingBiome::Prism:   Place(false, S, Yaw, FVector(300.f, 300.f, Tall), 1, Lean * 12.f, Lean * 9.f); break;   // crystal spire
+        case ERingBiome::Void:    Place(false, S, Yaw, FVector(280.f, 420.f, Tall), 1, 10.f + Lean * 15.f); break;        // leaning shard
+        case ERingBiome::Foundry: Place(false, S, Yaw, FVector(160.f, 500.f, Tall), 2); break;                           // girder
+        default:                  Place(false, S, Yaw, FVector(320.f, 320.f, Tall * 0.8f), 0, Lean * 5.f); break;        // obelisk
+        }
+    }
+
     // Cover blocks.
     const int32 Cover = Rng.RandRange(0, 4);
     for (int32 i = 0; i < Cover; ++i)

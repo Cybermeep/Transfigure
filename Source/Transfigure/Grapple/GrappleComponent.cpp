@@ -467,9 +467,16 @@ void UGrappleComponent::UpdateEdgeWrap(float DeltaTime)
     }
 }
 
+bool UGrappleComponent::CanSlingshot() const
+{
+    if (!OwnerCharacter || AnchorNormal.IsNearlyZero()) return false;
+    const FVector Up = URingFrameUtils::GetUpFor(OwnerCharacter);
+    return FMath::Abs(FVector::DotProduct(AnchorNormal, Up)) >= SlingSurfaceMinDot;
+}
+
 void UGrappleComponent::StartSurfaceCharge()
 {
-    if (!OwnerCharacter) return;
+    if (!OwnerCharacter || !CanSlingshot()) return;
     auto* CMC = OwnerCharacter->GetCharacterMovement();
     bWallGlue = false;
     bGroundAnchor = false;
@@ -497,9 +504,9 @@ void UGrappleComponent::UpdateGroundAnchor()
     const double Now = GetWorld()->GetRealTimeSeconds();
     if (!Input.IsNearlyZero()) LastMoveInputTime = Now;
 
-    if (FVector::DotProduct(Input, Facing) < -0.5f)
+    if (FVector::DotProduct(Input, Facing) < -0.5f && CanSlingshot())
     {
-        StartSurfaceCharge();   // S on the ground: dig in and charge
+        StartSurfaceCharge();   // S on the ground, anchor on a floor or ceiling: dig in and charge
         return;
     }
     if (!CMC->IsMovingOnGround())

@@ -150,6 +150,11 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Slingshot")
     float SlingLaunchFOVKick = 12.f;
 
+    /** Slingshots only charge from anchors on a floor or a ceiling: |anchor normal . up| at least
+     *  this (0.7 = within about 45 degrees of flat). Wall anchors never charge, so S doesn't bleed speed. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Slingshot")
+    float SlingSurfaceMinDot = 0.7f;
+
     /** Gravity while swinging round (like a wall run, so you don't drop). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|CornerSwing")
     float CornerSwingGravityScale = 0.1f;
@@ -328,6 +333,8 @@ public:
     void OnGluedWallEnded(const FVector& LastWallPoint, const FVector& WallNormal, const FVector& RunDir, float Speed);
     /** Holding the anchor on the ground or a glued wall + S: bleed speed, hang there charging a slingshot. */
     void StartSurfaceCharge();
+    /** The current anchor is on a floor or ceiling (see SlingSurfaceMinDot). */
+    bool CanSlingshot() const;
 
     /** Glued wall run with the anchor still ahead of you: you're pulled along the wall toward it (cm/s^2). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grapple|Feel|Anchor")
