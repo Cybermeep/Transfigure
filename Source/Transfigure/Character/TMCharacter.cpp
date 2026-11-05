@@ -1088,14 +1088,47 @@ void ATMCharacter::ArenaTestTick()
         return;
     }
 
-    // Stop defending and let them win.
+    if (T < 52.f)
+    {
+        // Up on a pillar, out of reach (Pillar_0 in make_combat_arena.py): enemies should
+        // gather at its base instead of giving up on pathing.
+        static bool bUp = false;
+        if (!bUp)
+        {
+            bUp = true;
+            if (WeaponComponent) WeaponComponent->StopFiring();
+            SetActorLocation(FVector(1478.f, 612.f, 1700.f), false, nullptr, ETeleportType::TeleportPhysics);
+            GetCharacterMovement()->Velocity = FVector::ZeroVector;
+            UE_LOG(LogTemp, Warning, TEXT("[TM] ARENA test: up on a pillar at %.0f s"), T);
+        }
+        CameraPitch = -55.f;
+        static bool bShotUp = false;
+        if (!bShotUp && T > 50.f)
+        {
+            bShotUp = true;
+            int32 Near = 0, Total = 0;
+            for (TActorIterator<ABaseEnemy> It(GetWorld()); It; ++It)
+            {
+                if (!It->IsAlive()) continue;
+                ++Total;
+                if (FVector::Dist2D(It->GetActorLocation(), FVector(1478.f, 612.f, 0.f)) < 700.f) ++Near;
+            }
+            UE_LOG(LogTemp, Warning, TEXT("[TM] ARENA test: %d of %d enemies waiting at the pillar base"), Near, Total);
+            FScreenshotRequest::RequestScreenshot(TEXT("Arena_01b_OnPillar"), true, false);
+        }
+        return;
+    }
+
+    // Back down; stop defending and let them win.
     if (bGodModeForTesting)
     {
         bGodModeForTesting = false;
         if (WeaponComponent) WeaponComponent->StopFiring();
+        SetActorLocation(FVector(0.f, -2500.f, 100.f), false, nullptr, ETeleportType::TeleportPhysics);
+        CameraPitch = 0.f;
         UE_LOG(LogTemp, Warning, TEXT("[TM] ARENA test: stopped defending at %.0f s"), T);
     }
-    if (T > 75.f)
+    if (T > 100.f)
     {
         UE_LOG(LogTemp, Warning, TEXT("[TM] ARENA test: nobody reached the player in 45 s - forcing death"));
         for (TActorIterator<ABaseEnemy> It(GetWorld()); It; ++It)

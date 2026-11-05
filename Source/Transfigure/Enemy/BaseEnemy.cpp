@@ -7,6 +7,7 @@
 #include "Engine/DamageEvents.h"
 #include "AIController.h"
 #include "Navigation/PathFollowingComponent.h"
+#include "NavigationSystem.h"
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "RingWorldGeometry.h"
@@ -208,7 +209,20 @@ void ABaseEnemy::UpdateChase()
     }
     CurrentState = EEnemyState::Combat;
 
-    const EPathFollowingRequestResult::Type Result = AI->MoveToActor(Player, AttackRange * 0.75f);
+    EPathFollowingRequestResult::Type Result = AI->MoveToActor(Player, AttackRange * 0.75f);
+    if (Result == EPathFollowingRequestResult::Failed)
+    {
+        // The player is in the air, on a wall or up on something (not on the nav mesh): head for
+        // the walkable spot under / nearest to them instead, so enemies gather below and wait.
+        if (const UNavigationSystemV1* Nav = FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld()))
+        {
+            FNavLocation Below;
+            if (Nav->ProjectPointToNavigation(Player->GetActorLocation(), Below, FVector(600.f, 600.f, 3000.f)))
+            {
+                Result = AI->MoveToLocation(Below.Location, AttackRange * 0.75f);
+            }
+        }
+    }
     const bool bFailed = (Result == EPathFollowingRequestResult::Failed);
     if (bFailed && !bDirectChase)
     {

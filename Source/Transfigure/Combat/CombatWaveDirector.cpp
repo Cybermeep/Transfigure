@@ -216,7 +216,9 @@ void ACombatWaveDirector::UnstickEnemies(float DeltaSeconds)
         FStuckTrack& T = Stuck.FindOrAdd(Weak);
         const FVector Pos = E->GetActorLocation();
         const bool bBusy = E->CurrentState == EEnemyState::Stunned;
-        if (FVector::Dist(Pos, T.LastPos) > 60.f || bBusy || FVector::Dist(Pos, Player->GetActorLocation()) < 800.f)
+        // Waiting under you (you're up on a tower or a wall) isn't stuck: only sideways distance counts.
+        const float Sideways = URingFrameUtils::StripVertical(Player->GetActorLocation() - Pos, URingFrameUtils::GetUpAt(Pos)).Size();
+        if (FVector::Dist(Pos, T.LastPos) > 60.f || bBusy || Sideways < 1000.f)
         {
             T.LastPos = Pos;
             T.StillTime = 0.f;
