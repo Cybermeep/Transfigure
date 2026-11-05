@@ -60,6 +60,14 @@ Gotchas: the imported mesh is in **centimetres** under a 0.01-scale parent empty
 - `Destruction/` — known non-functional; leave it (`ChunkPoolSize = 0`).
 - Test map: `/Game/Maps/L_TestArena`. Placeholder assets only (cubes, engine shapes, UE5 Mannequin).
 
+## Spells, combos, gun (`Transfiguration/`, `Combat/`; plan and status in `Docs/SPELL_PLAN.md`)
+
+- Each spell is a `UTransfigurationDefinition` data asset; `EffectClass` picks an archetype in `Effects/SpellEffects` (Area, Line, Chain, Pull, Structure, Self). All spell damage goes through `SpellHit::` (`SpellHitLibrary`); spells that last run in `ASpellZone`. Visuals are `ASpellFX` (engine shapes + `M_SpellGlow`, which fades within ~3.6 m of the camera; `SetNearFade(0)` turns that off).
+- `Tools/create_spells.py` (editor closed, run like `inspect_setup.py`) rebuilds every `DA_<Spell>`, the combo assets, `M_SpellGlow`, `IA_Spellbook` (key B) and `DA_SpellRegistry`. Expect `registry: 38 spells (saved: 38)`. Change the SPELLS / COMBOS tables, not the assets. It deletes and recreates `M_SpellGlow`, so a failed run leaves it missing until it's run again.
+- Combos: `UTransfigurationCastingComponent::TryFireCombo` (the old `UTransfigurationComboDetector` no longer ticks).
+- Gun: `UWeaponComponent` (hold to fire, `FireRate`, recoil through `ATMCharacter::AddRecoil`). Headshots: `ABaseEnemy::IsHeadHit` (zombies: the nearest part is the head).
+- Smoke test (editor closed, ~2 min): `UnrealEditor.exe <uproject> /Game/Maps/L_TestArena -game -TMSpellTest -windowed -ResX=1280 -ResY=720 -unattended -nosound -ABSLOG=<project>/Saved/Logs/SmokeTest.log`. Casts every spell and combo and holds the trigger on zombies, logs `[TM] SMOKE ...`, saves `Saved/Screenshots/WindowsEditor/Smoke_*.png`, quits. Must end with `spell test done (27 spells, 11 combos)`.
+
 ## Plan and working rules
 
 - `Docs/FIX_PLAN.md` — phases 0–5, then "Ready for the limb system". Line numbers there refer to the original commit.

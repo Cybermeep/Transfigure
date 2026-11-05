@@ -2,7 +2,19 @@
 
 Draft for prioritising. Each item has an ID (pick by ID), a size (**S** about an hour, **M** a few hours, **L** a long block) and what it needs first. Items marked *(exists)* are already in the game and only get extended.
 
-## What's there now
+## Status (2026-11-05)
+
+Built and checked by the headless smoke test (commits `0ec0798`, `d29d054`, `a2d3179`, `64dd30b`):
+
+- **Done:** A1, A2, A3, A5, A6, A7, B1, B2, B3, B4, C1, E1–E11, most of A4 and A8.
+- **Spells (27):** every D spell except **D19 Portal Pair, D20 Mana Font, D25 Void Tether**. Extra: **Arcane Lance** (instant bolt that marks). Fire Trail and Static Charge are auras that follow you (no special wall-run or slam hook yet).
+- **Combos:** a matching pair fires its combo when either sigil goes off within 6 m (`ComboRadius`). Differences from the table below: Steam Burst knocks back and burns (no blinding); Shatter Storm is a freezing chain across 9 enemies; Black Flame burns at 3 stacks but doesn't spread; Magma Field has no slow. Three extra: **Hoarfrost Rift** (Ice + Void), **Tempest Rift** (Lightning + Void), **Gravity Well** (Earth + Void). Overcharge = 1.6x damage and 1.5x radius; Amplify = 1.3x damage and 2x radius.
+- **Spellbook (B):** canvas-drawn, not Slate/UMG. It lists combos (??? until found).
+- **Gunplay (not in this plan):** hold to fire at 9 shots/s, tracers and impact sparks in the infusion colour, muzzle flash, recoil that settles, headshots (gold numbers, x2 damage, extra mana), shots shove loose limbs and corpses.
+- **Not done:** A8 hit-stop and sounds; B5–B7; C2–C4; D19, D20, D25.
+- **Tools:** `Tools/create_spells.py` (editor closed) rebuilds every spell, combo, the glow material and the registry. Smoke test: run the game with `-TMSpellTest` (see CLAUDE.md).
+
+## What was there before this plan
 
 - **Casting:** tap Q places the selected sigil at your aim; hold Q opens a radial wheel of every spell in `DA_SpellRegistry`; trigger keys fire the nearest sigil or all of them. The temporal clap fires all sigils together.
 - **Spells:** three data assets: `DA_FireBlast` (radial damage), `DA_TestHeal`, `DA_TestSpeed`. Effect code also exists for an ice wall. Portals exist but are broken.
