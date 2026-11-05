@@ -525,8 +525,36 @@ void ATMHUD::DrawSpellbook(ATMCharacter* Char)
     const FName Shown = !BookHover.IsNone() ? BookHover : BookSelected;
     const float DX = W * 0.68f, DW = W - DX - 50.f;
     DrawRect(Panel, DX - 16.f, GridY - 10.f, DW + 32.f, H * 0.62f);
-    if (!Shown.IsNone()) DrawSpellDetails(Casting->GetSpellDefinition(Shown), DX, GridY, DW);
-    else DrawLeftText(TEXT("Hover a spell to read about it."), DX, GridY, Dim, 0.9f);
+    if (!Shown.IsNone())
+    {
+        DrawSpellDetails(Casting->GetSpellDefinition(Shown), DX, GridY, DW);
+    }
+    else
+    {
+        // Combos: place two sigils close together and set one off.
+        const FLinearColor Unknown(0.5f, 0.5f, 0.55f);
+        DrawLeftText(TEXT("COMBOS"), DX, GridY, FLinearColor(0.9f, 0.85f, 1.f), 1.2f);
+        DrawLeftText(TEXT("Place two sigils close together, then set one off."), DX, GridY + 28.f, Dim, 0.8f);
+        float Y = GridY + 58.f;
+        for (const UTransfigurationDefinition* C : Casting->GetComboSpells())
+        {
+            const bool bFound = Casting->DiscoveredCombos.Contains(C->SpellID);
+            DrawLeftText(FString::Printf(TEXT("%s + %s"), *USpellLibrary::GetElementName(C->ComboElementA),
+                *USpellLibrary::GetElementName(C->ComboElementB)), DX, Y, Dim, 0.8f);
+            DrawLeftText(bFound ? C->DisplayName.ToString() : FString(TEXT("???")), DX + 170.f, Y, bFound ? C->GetSpellColor() : Unknown, 0.8f);
+            Y += 20.f;
+        }
+        const bool bOver = Casting->DiscoveredCombos.Contains(FName(TEXT("Overcharge")));
+        const bool bAmp = Casting->DiscoveredCombos.Contains(FName(TEXT("Amplify")));
+        DrawLeftText(TEXT("Same element twice"), DX, Y, Dim, 0.8f);
+        DrawLeftText(bOver ? TEXT("Overcharge") : TEXT("???"), DX + 170.f, Y, bOver ? FLinearColor::White : Unknown, 0.8f);
+        Y += 20.f;
+        DrawLeftText(TEXT("Arcane + any"), DX, Y, Dim, 0.8f);
+        DrawLeftText(bAmp ? TEXT("Amplify") : TEXT("???"), DX + 170.f, Y,
+            bAmp ? USpellLibrary::GetElementColor(ETransfigurationElement::Arcane) : Unknown, 0.8f);
+        Y += 30.f;
+        DrawLeftText(TEXT("Hover a spell to read about it."), DX, Y, Dim, 0.8f);
+    }
 
     // The wheel's 8 slots.
     const int32 Slots = UTransfigurationCastingComponent::WheelSlots;

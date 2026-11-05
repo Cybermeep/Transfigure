@@ -30,6 +30,11 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Sigil")
         void TriggerManual();
 
+    /** Used up by a combo: stops without casting its own spell (flashes and goes). */
+    void ConsumeForCombo();
+
+    AActor* GetCaster() const { return Caster.Get(); }
+
     UFUNCTION(BlueprintImplementableEvent, Category = "Sigil|VFX")
         void OnSigilPlaced();
 

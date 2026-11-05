@@ -1,4 +1,4 @@
-﻿# Tools/create_spells.py
+# Tools/create_spells.py
 #
 # Builds every spell from one table (SPELL_PLAN A7): a DA_<Id> data asset per
 # spell in /Game/Spells, all registered in /Game/DA_SpellRegistry. Each spell
@@ -60,7 +60,20 @@ def make_glow_material():
     c = node(unreal.MaterialExpressionMultiply, -250, 300)
     MEL.connect_material_expressions(b, "", c, "A")
     MEL.connect_material_expressions(rim, "", c, "B")
-    MEL.connect_material_property(c, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    # Fade out right in front of the camera: an aura ring or burst passing under/around the player
+    # otherwise floods the bottom of the view with glow.
+    # saturate((PixelDepth - 40) / 320): 0 at the camera, full brightness from 3.6 m away.
+    depth = node(unreal.MaterialExpressionPixelDepth, -900, 560)
+    sub = node(unreal.MaterialExpressionSubtract, -700, 560, const_b=40.0)
+    MEL.connect_material_expressions(depth, "", sub, "A")
+    div = node(unreal.MaterialExpressionDivide, -550, 560, const_b=320.0)
+    MEL.connect_material_expressions(sub, "", div, "A")
+    fade = node(unreal.MaterialExpressionSaturate, -400, 560)
+    MEL.connect_material_expressions(div, "", fade, "")
+    d = node(unreal.MaterialExpressionMultiply, -100, 340)
+    MEL.connect_material_expressions(c, "", d, "A")
+    MEL.connect_material_expressions(fade, "", d, "B")
+    MEL.connect_material_property(d, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     MEL.recompile_material(m)
     EAL.save_loaded_asset(m)
     log("material %s" % path)
@@ -224,6 +237,72 @@ COPIES = [
 ]
 
 
+# Combos: (id, name, element A, element B, archetype, damage, extra, description). Fired when two sigils of
+# A and B go off within the casting component's ComboRadius. Same element twice = Overcharge and Arcane + any
+# other = Amplify are handled in code (no asset).
+COMBOS = [
+    ("SteamBurst", "Steam Burst", E.FIRE, E.ICE, AREA, 45,
+     dict(impact_radius=500, falloff_radius=1000, knockback=900, status=S.BURNING, status_stacks=2, impact_shake=0.6),
+     "Fire meets ice: a scalding blast of steam that hurls everything back and burns."),
+    ("PlasmaNova", "Plasma Nova", E.FIRE, E.LIGHTNING, AREA, 90,
+     dict(impact_radius=450, falloff_radius=1000, knockback=700, launch=400, status=S.SHOCKED, status_duration=1, impact_shake=0.9),
+     "Fire and lightning collapse into a huge plasma explosion that stuns."),
+    ("MagmaField", "Magma Field", E.FIRE, E.EARTH, AREA, 14,
+     dict(falloff_radius=650, duration=7, tick_interval=0.4, status=S.BURNING, status_stacks=1, status_duration=2, impact_shake=0.0),
+     "The ground turns to magma for 7 seconds, burning anything that stands on it."),
+    ("BlackFlame", "Black Flame", E.FIRE, E.VOID, AREA, 10,
+     dict(falloff_radius=700, duration=8, tick_interval=0.4, status=S.BURNING, status_stacks=3, status_duration=3, impact_shake=0.0),
+     "Void-fed fire that burns three times as hot for 8 seconds."),
+    ("ShatterStorm", "Shatter Storm", E.ICE, E.LIGHTNING, CHAIN, 45,
+     dict(falloff_radius=900, chain_count=8, chain_range=1100, status=S.CHILLED, status_stacks=3, status_duration=4, impact_shake=0.5),
+     "Frozen lightning leaps between nine enemies and freezes each one solid - then shoot them to shatter."),
+    ("GlacierSpire", "Glacier Spire", E.ICE, E.EARTH, STRUCT, 30,
+     dict(structure_shape=SH.PILLAR, structure_size=unreal.Vector(500, 0, 2600), structure_lifetime=20,
+          impact_radius=300, falloff_radius=700, knockback=900, status=S.CHILLED, status_stacks=2, impact_shake=0.6),
+     "A towering spire of ice bursts from the ground, freezing everything around its base. Climb it, swing from it."),
+    ("Hoarfrost", "Hoarfrost Rift", E.ICE, E.VOID, PULL, 40,
+     dict(impact_radius=250, falloff_radius=700, pull_strength=3500, duration=2, status=S.CHILLED, status_stacks=3,
+          status_duration=4, impact_shake=0.5),
+     "A freezing rift that drags enemies in and freezes them solid."),
+    ("MagnetPulse", "Magnet Pulse", E.LIGHTNING, E.EARTH, PULL, 60,
+     dict(impact_radius=300, falloff_radius=900, pull_strength=4500, duration=1.5, status=S.SHOCKED, status_duration=1, impact_shake=0.6),
+     "A magnetic surge yanks everything in, tearing at machine parts."),
+    ("TempestRift", "Tempest Rift", E.LIGHTNING, E.VOID, AREA, 22,
+     dict(falloff_radius=1000, duration=6, tick_interval=0.3, one_random_target_per_tick=True, status=S.SHOCKED,
+          status_duration=0.6, impact_shake=0.05),
+     "A storm out of the void: lightning strikes a random enemy every third of a second for 6 seconds."),
+    ("GravityWell", "Gravity Well", E.EARTH, E.VOID, AREA, 30,
+     dict(impact_radius=450, falloff_radius=800, launch=1700, status=S.VOIDED, status_duration=4, impact_shake=0.7),
+     "Gravity breaks: everything nearby is thrown high into the air and weakened."),
+    ("Singularity", "Singularity", E.VOID, E.ARCANE, PULL, 140,
+     dict(impact_radius=350, falloff_radius=1000, pull_strength=5000, duration=3, status=S.VOIDED, status_duration=5, impact_shake=1.0),
+     "A singularity drags in everything around it for 3 seconds, then detonates."),
+]
+
+
+def build_combos(table):
+    for sid, name, a, b, arch, dmg, extra, desc in COMBOS:
+        da = get_or_make_spell(sid)
+        da.set_editor_property("spell_id", sid)
+        da.set_editor_property("display_name", unreal.Text(name))
+        da.set_editor_property("description", unreal.Text(desc))
+        da.set_editor_property("element", a)
+        da.set_editor_property("is_combo", True)
+        da.set_editor_property("combo_element_a", a)
+        da.set_editor_property("combo_element_b", b)
+        da.set_editor_property("effect_class", effect_class(arch))
+        da.set_editor_property("trigger_type", T.MANUAL)
+        da.set_editor_property("mana_cost", 0.0)
+        da.set_editor_property("cooldown_duration", 0.0)
+        da.set_editor_property("base_damage", float(dmg))
+        da.set_editor_property("causes_environmental_destruction", False)
+        for k, v in extra.items():
+            da.set_editor_property(k, v)
+        EAL.save_loaded_asset(da, False)
+        table[unreal.Name(sid)] = da
+    log("combos: %d built" % len(COMBOS))
+
+
 def effect_class(name):
     return getattr(unreal, name).static_class()
 
@@ -284,6 +363,8 @@ def build_spells(registry):
         EAL.save_loaded_asset(da, False)
         table[unreal.Name(sid)] = da
         log("copied %s -> %s" % (src, sid))
+
+    build_combos(table)
 
     # The old test entries are replaced by the copies above.
     for key in list(table.keys()):

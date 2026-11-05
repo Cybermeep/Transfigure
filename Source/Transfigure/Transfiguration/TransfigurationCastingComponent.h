@@ -77,6 +77,21 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Casting")
         bool CastAtLocation(FName SpellID, FVector Location, FVector SurfaceNormal);
 
+    // ── Combos (SPELL_PLAN E) ──
+    /** Two sigils this close when one fires: they go off together as a combo. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Casting|Combo")
+        float ComboRadius = 600.f;
+
+    /** Combos found so far (the spellbook lists them; the rest show as ???). Overcharge / Amplify included. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Casting|Combo")
+        TArray<FName> DiscoveredCombos;
+
+    /** Every combo spell in the registry. */
+    TArray<UTransfigurationDefinition*> GetComboSpells() const;
+
+    /** Called by a sigil about to fire: if a partner sigil is close, both go off as a combo (true). */
+    bool TryFireCombo(ASigilActor* Fired);
+
     /** Testing: forget all cooldowns. */
     void ClearCooldowns() { CooldownReadyAt.Reset(); }
 

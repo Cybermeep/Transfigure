@@ -15,6 +15,22 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "RingFrameUtils.h"
 
+static float GSpellDamageScale = 1.f;
+static float GSpellRadiusScale = 1.f;
+
+SpellHit::FScaleScope::FScaleScope(float DamageScale, float RadiusScale)
+    : PrevDamage(GSpellDamageScale), PrevRadius(GSpellRadiusScale)
+{
+    GSpellDamageScale *= DamageScale;
+    GSpellRadiusScale *= RadiusScale;
+}
+
+SpellHit::FScaleScope::~FScaleScope()
+{
+    GSpellDamageScale = PrevDamage;
+    GSpellRadiusScale = PrevRadius;
+}
+
 FSpellHitParams SpellHit::FromDefinition(const UTransfigurationDefinition* Def, AActor* Instigator)
 {
     FSpellHitParams P;
@@ -38,6 +54,9 @@ FSpellHitParams SpellHit::FromDefinition(const UTransfigurationDefinition* Def, 
     P.CasterLaunch = Def->CasterLaunch;
     P.Shake = Def->ImpactShake;
     P.Color = Def->GetSpellColor();
+    P.Damage *= GSpellDamageScale;
+    P.InnerRadius *= GSpellRadiusScale;
+    P.OuterRadius *= GSpellRadiusScale;
     return P;
 }
 

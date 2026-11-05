@@ -9,6 +9,7 @@
 #include "ProceduralMeshComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Transfiguration/TransfigurationCastingComponent.h"
 
 ASigilActor::ASigilActor()
 {
@@ -201,9 +202,29 @@ void ASigilActor::OnTimedAutoFire()
     }
 }
 
+void ASigilActor::ConsumeForCombo()
+{
+    bArmed = false;
+    GetWorldTimerManager().ClearTimer(TTLTimerHandle);
+    GetWorldTimerManager().ClearTimer(AutoFireTimerHandle);
+    FiredAge = 0.f;
+    SetActorEnableCollision(false);
+    if (SigilDecal) SigilDecal->SetVisibility(false);
+    SetLifeSpan(0.5f);
+}
+
 void ASigilActor::ExecuteSpellEffect()
 {
     if (!SpellDef || !SpellDef->EffectClass) return;
+
+    // Another sigil close by? The two may fire together as a combo instead.
+    if (AActor* CasterActor = Caster.Get())
+    {
+        if (UTransfigurationCastingComponent* Casting = CasterActor->FindComponentByClass<UTransfigurationCastingComponent>())
+        {
+            if (Casting->TryFireCombo(this)) return;
+        }
+    }
 
     bArmed = false;
     UE_LOG(LogTemp, Warning, TEXT("[TM] Sigil fired: %s at %s"), *SpellDef->SpellID.ToString(), *GetActorLocation().ToString());

@@ -48,6 +48,15 @@ namespace SpellHit
     /** Physics push for severed limbs and ragdoll corpses. */
     TRANSFIGURE_API void PushLoose(UWorld* World, const FVector& Origin, float Radius, float Strength);
 
+    /** While one of these is alive, every spell's damage and radius are multiplied (Overcharge / Amplify). */
+    struct TRANSFIGURE_API FScaleScope
+    {
+        FScaleScope(float DamageScale, float RadiusScale);
+        ~FScaleScope();
+    private:
+        float PrevDamage, PrevRadius;
+    };
+
     /** Launch a character along ring-up (keeps its sideways speed). */
     TRANSFIGURE_API void LaunchUp(ACharacter* Character, float Speed);
 }

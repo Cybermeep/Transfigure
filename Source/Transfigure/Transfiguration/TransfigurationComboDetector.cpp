@@ -11,6 +11,9 @@
 UTransfigurationComboDetector::UTransfigurationComboDetector()
 {
     PrimaryComponentTick.bCanEverTick = true;
+    // Replaced by UTransfigurationCastingComponent::TryFireCombo (combos fire when a sigil goes off,
+    // recipes are data assets). Kept so existing Blueprints still load; it no longer ticks.
+    PrimaryComponentTick.bStartWithTickEnabled = false;
 }
 
 void UTransfigurationComboDetector::TickComponent(

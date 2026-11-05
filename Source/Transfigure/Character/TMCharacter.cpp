@@ -1,4 +1,4 @@
-﻿// Source/TMovement/Private/Character/TMCharacter.cpp
+// Source/TMovement/Private/Character/TMCharacter.cpp
 
 #include "Character/TMCharacter.h"
 #include "States/TMState_Idle.h"
@@ -727,9 +727,15 @@ void ATMCharacter::ToggleSpellbook()
     UE_LOG(LogTemp, Warning, TEXT("[TM] Spellbook %s"), bSpellbookOpen ? TEXT("opened") : TEXT("closed"));
 }
 
+// Where the smoke test started (movement spells move the player; combos reset to here).
+static FVector GSmokeStartLocation = FVector::ZeroVector;
+static FVector GSmokeStartForward = FVector::ForwardVector;
+
 void ATMCharacter::StartSpellSmokeTest()
 {
     UE_LOG(LogTemp, Warning, TEXT("[TM] SMOKE: spell test starting"));
+    GSmokeStartLocation = GetActorLocation();
+    GSmokeStartForward = GetActorForwardVector();
     bInfiniteManaForTesting = true;
     SmokeStep = 0;
     CameraPitch = -22.f;   // look down at where the sigils go
@@ -741,6 +747,15 @@ void ATMCharacter::SpellSmokeTestStep()
     UWorld* World = GetWorld();
     if (!World || !TransfigurationCasting) return;
     const TArray<FName> Spells = TransfigurationCasting->GetKnownSpellIDs();
+    if (SmokeStep >= Spells.Num())
+    {
+        // Combos: back to the start spot, looking down at where the sigils go.
+        SetActorLocation(GSmokeStartLocation, false, nullptr, ETeleportType::TeleportPhysics);
+        GetCharacterMovement()->Velocity = FVector::ZeroVector;
+        CachedFacingForward = GSmokeStartForward;
+        SetActorRotation(FRotationMatrix::MakeFromXZ(GSmokeStartForward, GetRingUp()).ToQuat());
+        CameraPitch = -22.f;
+    }
     const FVector Up = GetRingUp();
     const FVector Fwd = GetActorForwardVector();
     CurrentMana = MaxMana;
@@ -800,8 +815,84 @@ void ATMCharacter::SpellSmokeTestStep()
         return;
     }
 
+    // Combos: two sigils 2 m apart, then set them off.
+    const TArray<UTransfigurationDefinition*> Combos = TransfigurationCasting->GetComboSpells();
+    const int32 ComboStep = SmokeStep - Spells.Num();
+    if (ComboStep < Combos.Num() + 2)
+    {
+        auto PickSpell = [&](ETransfigurationElement E) -> FName
+        {
+            for (const FName& Id : Spells)
+            {
+                const UTransfigurationDefinition* D = TransfigurationCasting->GetSpellDefinition(Id);
+                if (D && D->Element == E && D->TriggerType == ESigilTriggerType::Manual && D->SelfAction == ESpellSelfAction::None
+                    && !D->bIsPersistentSigil && !D->bFollowCaster && D->Delay <= 0.f) return Id;
+            }
+            return NAME_None;
+        };
+        ETransfigurationElement A, B;
+        FString Label;
+        if (ComboStep < Combos.Num())
+        {
+            A = Combos[ComboStep]->ComboElementA;
+            B = Combos[ComboStep]->ComboElementB;
+            Label = Combos[ComboStep]->SpellID.ToString();
+        }
+        else if (ComboStep == Combos.Num())
+        {
+            A = B = ETransfigurationElement::Fire;
+            Label = TEXT("Overcharge");
+        }
+        else
+        {
+            A = ETransfigurationElement::Arcane;
+            B = ETransfigurationElement::Ice;
+            Label = TEXT("Amplify");
+        }
+        const FName SA = PickSpell(A), SB = PickSpell(B);
+        for (int32 i = 0; i < 3; ++i)
+        {
+            const FVector P = Ground(GetActorLocation() + Fwd * (900.f + i * 150.f) + GetActorRightVector() * (i - 1) * 250.f) + Up * 110.f;
+            FActorSpawnParameters SP;
+            SP.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+            if (AProceduralZombie* Z = World->SpawnActor<AProceduralZombie>(AProceduralZombie::StaticClass(), P, GetActorRotation() + FRotator(0.f, 180.f, 0.f), SP))
+            {
+                Z->SetLifeSpan(10.f);
+            }
+        }
+        const FVector Spot = Ground(GetActorLocation() + Fwd * 700.f);
+        const bool bA = !SA.IsNone() && TransfigurationCasting->CastAtLocation(SA, Spot - GetActorRightVector() * 100.f, Up);
+        TransfigurationCasting->ClearCooldowns();
+        const bool bB = !SB.IsNone() && TransfigurationCasting->CastAtLocation(SB, Spot + GetActorRightVector() * 100.f, Up);
+        UE_LOG(LogTemp, Warning, TEXT("[TM] SMOKE combo %s: %s + %s placed=%d%d"), *Label, *SA.ToString(), *SB.ToString(), bA ? 1 : 0, bB ? 1 : 0);
+        FTimerHandle Fire;
+        GetWorldTimerManager().SetTimer(Fire, FTimerDelegate::CreateWeakLambda(this, [this]()
+        {
+            if (TransfigurationCasting) TransfigurationCasting->TriggerAllSigils();
+        }), 0.4f, false);
+        FTimerHandle Shot;
+        const FString ShotName = FString::Printf(TEXT("Smoke_C%02d_%s"), ComboStep + 1, *Label);
+        GetWorldTimerManager().SetTimer(Shot, FTimerDelegate::CreateWeakLambda(this, [ShotName]()
+        {
+            FScreenshotRequest::RequestScreenshot(ShotName, true, false);
+        }), 0.7f, false);
+        if (ComboStep == Combos.Num() + 1)
+        {
+            // Last one: open the spellbook to see the discovered combos.
+            FTimerHandle Book;
+            GetWorldTimerManager().SetTimer(Book, FTimerDelegate::CreateWeakLambda(this, [this]() { ToggleSpellbook(); }), 1.2f, false);
+            FTimerHandle BookShot;
+            GetWorldTimerManager().SetTimer(BookShot, FTimerDelegate::CreateWeakLambda(this, []()
+            {
+                FScreenshotRequest::RequestScreenshot(TEXT("Smoke_Spellbook_Combos"), true, false);
+            }), 1.25f, false);
+        }
+        ++SmokeStep;
+        return;
+    }
+
     GetWorldTimerManager().ClearTimer(SmokeTestTimer);
-    UE_LOG(LogTemp, Warning, TEXT("[TM] SMOKE: spell test done (%d spells) - quitting"), Spells.Num());
+    UE_LOG(LogTemp, Warning, TEXT("[TM] SMOKE: spell test done (%d spells, %d combos) - quitting"), Spells.Num(), Combos.Num());
     FTimerHandle Quit;
     GetWorldTimerManager().SetTimer(Quit, FTimerDelegate::CreateWeakLambda(this, [this]()
     {

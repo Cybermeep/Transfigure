@@ -143,6 +143,17 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
         float ImpactShake = 0.3f;
 
+    /** Combo spell: fires when two sigils of ComboElementA and ComboElementB go off close together.
+     *  Not castable on its own (never in the spellbook's castable list). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Combo")
+        bool bIsCombo = false;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Combo", meta = (EditCondition = "bIsCombo"))
+        ETransfigurationElement ComboElementA = ETransfigurationElement::None;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Combo", meta = (EditCondition = "bIsCombo"))
+        ETransfigurationElement ComboElementB = ETransfigurationElement::None;
+
     /** Alpha 0 = use the element's colour. */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Visuals")
         FLinearColor ColorOverride = FLinearColor(0.f, 0.f, 0.f, 0.f);

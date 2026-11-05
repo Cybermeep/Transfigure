@@ -13,6 +13,9 @@
 #include "DrawDebugHelpers.h"
 #include "Combat/CombatFeedbackSubsystem.h"
 #include "Combat/WeaponComponent.h"
+#include "Transfiguration/TransfigurationEffectBase.h"
+#include "Transfiguration/SpellHitLibrary.h"
+#include "Transfiguration/SpellFX.h"
 
 UTransfigurationCastingComponent::UTransfigurationCastingComponent()
 {
@@ -32,7 +35,7 @@ void UTransfigurationCastingComponent::BeginPlay()
             if (Pair.Value) KnownSpells.AddUnique(Pair.Key);
         }
     }
-    KnownSpells.RemoveAll([Reg](const FName& Id) { return !Reg->GetSpell(Id); });
+    KnownSpells.RemoveAll([Reg](const FName& Id) { const UTransfigurationDefinition* D = Reg->GetSpell(Id); return !D || D->bIsCombo; });
 
     EquippedSpells.SetNum(WheelSlots);
     for (FName& Id : EquippedSpells)
@@ -341,6 +344,99 @@ bool UTransfigurationCastingComponent::CastAtAim(FName SpellID)
         CancelDrawMode();
         return false;
     }
+    return true;
+}
+
+TArray<UTransfigurationDefinition*> UTransfigurationCastingComponent::GetComboSpells() const
+{
+    TArray<UTransfigurationDefinition*> Out;
+    if (const UTransfigurationRegistry* Reg = GetSpellRegistry())
+    {
+        for (const auto& Pair : Reg->SpellTable)
+        {
+            if (Pair.Value && Pair.Value->bIsCombo) Out.Add(Pair.Value);
+        }
+    }
+    Out.Sort([](const UTransfigurationDefinition& A, const UTransfigurationDefinition& B)
+    {
+        return A.ComboElementA != B.ComboElementA ? A.ComboElementA < B.ComboElementA : A.ComboElementB < B.ComboElementB;
+    });
+    return Out;
+}
+
+bool UTransfigurationCastingComponent::TryFireCombo(ASigilActor* Fired)
+{
+    const UTransfigurationDefinition* FiredDef = Fired ? Fired->GetSpellDefinition() : nullptr;
+    auto Comboable = [](const UTransfigurationDefinition* D)
+    {
+        return D && !D->bIsCombo && !D->bIsPersistentSigil && !D->bIsHealingSigil && !D->bIsBuffSigil
+            && D->SelfAction == ESpellSelfAction::None && !D->bFollowCaster && D->Element != ETransfigurationElement::None
+            && D->EffectClass;
+    };
+    if (!Comboable(FiredDef)) return false;
+    UWorld* World = GetWorld();
+    const TArray<UTransfigurationDefinition*> Recipes = GetComboSpells();
+
+    ASigilActor* Best = nullptr;
+    UTransfigurationDefinition* BestCombo = nullptr;   // a recipe, or null for Overcharge / Amplify
+    UTransfigurationDefinition* GenericSpell = nullptr;
+    float BestDist = ComboRadius;
+    FName ComboName;
+    for (const TObjectPtr<ASigilActor>& SPtr : ActiveSigils)
+    {
+        ASigilActor* S = SPtr.Get();
+        if (!S || S == Fired || !S->IsArmed()) continue;
+        UTransfigurationDefinition* Other = S->GetSpellDefinition();
+        if (!Comboable(Other)) continue;
+        const float D = FVector::Dist(S->GetActorLocation(), Fired->GetActorLocation());
+        if (D > BestDist) continue;
+
+        const ETransfigurationElement A = FiredDef->Element, B = Other->Element;
+        UTransfigurationDefinition* Match = nullptr;
+        for (UTransfigurationDefinition* R : Recipes)
+        {
+            if ((R->ComboElementA == A && R->ComboElementB == B) || (R->ComboElementA == B && R->ComboElementB == A)) { Match = R; break; }
+        }
+        if (Match)
+        {
+            Best = S; BestDist = D; BestCombo = Match; GenericSpell = nullptr; ComboName = Match->SpellID;
+        }
+        else if (A == B)
+        {
+            Best = S; BestDist = D; BestCombo = nullptr; GenericSpell = const_cast<UTransfigurationDefinition*>(FiredDef); ComboName = TEXT("Overcharge");
+        }
+        else if (A == ETransfigurationElement::Arcane || B == ETransfigurationElement::Arcane)
+        {
+            Best = S; BestDist = D; BestCombo = nullptr; GenericSpell = A == ETransfigurationElement::Arcane ? Other : const_cast<UTransfigurationDefinition*>(FiredDef);
+            ComboName = TEXT("Amplify");
+        }
+    }
+    if (!Best) return false;
+
+    const FVector Mid = (Fired->GetActorLocation() + Best->GetActorLocation()) * 0.5f;
+    Best->ConsumeForCombo();
+    Fired->ConsumeForCombo();
+
+    UTransfigurationDefinition* ComboSpell = BestCombo ? BestCombo : GenericSpell;
+    const FLinearColor Color = ComboSpell->GetSpellColor();
+    ASpellFX::SpawnBeam(World, Fired->GetActorLocation(), Best->GetActorLocation(), Color, 30.f, 0.4f);
+    {
+        // Overcharge: same element twice, the spell at 1.6x damage and 1.5x size. Amplify (Arcane): 1.3x, 2x size.
+        const float DamageScale = BestCombo ? 1.f : (ComboName == TEXT("Overcharge") ? 1.6f : 1.3f);
+        const float RadiusScale = BestCombo ? 1.f : (ComboName == TEXT("Overcharge") ? 1.5f : 2.f);
+        SpellHit::FScaleScope Scale(DamageScale, RadiusScale);
+        if (UTransfigurationEffectBase* Effect = NewObject<UTransfigurationEffectBase>(this, ComboSpell->EffectClass))
+        {
+            Effect->Execute(Mid, ComboSpell, GetOwner(), World);
+        }
+    }
+
+    const FString Display = BestCombo ? BestCombo->DisplayName.ToString() : ComboName.ToString();
+    const bool bNew = !DiscoveredCombos.Contains(ComboName);
+    if (bNew) DiscoveredCombos.Add(ComboName);
+    Toast(FString::Printf(TEXT("COMBO: %s%s"), *Display, bNew ? TEXT("  (discovered!)") : TEXT("")), Color);
+    if (UCombatFeedbackSubsystem* Feedback = UCombatFeedbackSubsystem::Get(this)) Feedback->AddShake(0.5f);
+    UE_LOG(LogTemp, Warning, TEXT("[TM] COMBO %s: %s + %s"), *Display, *FiredDef->SpellID.ToString(), *Best->GetSpellDefinition()->SpellID.ToString());
     return true;
 }
 
