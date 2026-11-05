@@ -102,6 +102,14 @@ public:
 
     /** Quick FOV punch (degrees) that fades out, e.g. on a grapple boost. */
     void AddFOVKick(float Degrees) { FOVKick += Degrees; }
+    /** Camera shake (0..1 "trauma"; adds up, decays). Big spells, hits taken. */
+    void AddCameraShake(float Trauma) { CameraShakeTrauma = FMath::Min(CameraShakeTrauma + Trauma, 1.f); }
+    /** Real time the player last took damage (HUD hurt flash). */
+    double GetLastHurtTime() const { return LastHurtTime; }
+
+    /** Spellbook screen (key B): browse known spells, set the wheel. */
+    bool IsSpellbookOpen() const { return bSpellbookOpen; }
+    void ToggleSpellbook();
     /** Seconds since you were last wall running (0 while you are). */
     float GetTimeSinceWallRun() const { return TimeSinceWallRun; }
     /** Narrow the view by this much this frame (e.g. slingshot tension). Set every frame it applies. */
@@ -425,7 +433,8 @@ public:
 
     /** Current damage buff multiplier (1 = no buff). Used by the gun and spells. */
     UFUNCTION(BlueprintPure, Category = "TM|Magic|Buffs")
-    float GetDamageMultiplier() const { return CurrentDamageMultiplier; }
+    /** Damage buff from sigils (ApplyDamageBuff) times any Damage buff (Might). */
+    float GetDamageMultiplier() const;
 
     UFUNCTION(BlueprintCallable, Category = "TM|Magic|Buffs")
     float GetHealth() const { return Health; }
@@ -595,6 +604,10 @@ private:
     UPROPERTY(EditAnywhere, Category = "TM|Input")
     TObjectPtr<UInputAction> IA_WebTrap;
 
+    /** Spellbook (B). Loaded from /Game/Input/IA_Spellbook if left empty. */
+    UPROPERTY(EditAnywhere, Category = "TM|Input")
+    TObjectPtr<UInputAction> IA_Spellbook;
+
     // ── INPUT HANDLERS ──
     void OnMove(const FInputActionValue& Value);
     void OnLook(const FInputActionValue& Value);
@@ -678,6 +691,13 @@ private:
     bool bOverspeedBraking = false;
     float FOVKick = 0.f;
     float FOVTension = 0.f;
+    float CameraShakeTrauma = 0.f;
+    float CameraShakeTime = 0.f;
+    FRotator CameraShakeRot = FRotator::ZeroRotator;
+    double LastHurtTime = -100.0;
+    bool bSpellbookOpen = false;
+    bool bOnSlipperyFloor = false;
+    float SavedGroundFriction = 8.f;
     float LastWallRunSide = 0.f;
     float TimeSinceWallRun = 100.f;
     float DefaultBrakingDecelerationWalking = 2048.f;

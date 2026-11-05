@@ -11,10 +11,114 @@
 #include "Engine/World.h"
 #include "TimerManager.h"
 #include "DrawDebugHelpers.h"
+#include "Combat/CombatFeedbackSubsystem.h"
 
 UTransfigurationCastingComponent::UTransfigurationCastingComponent()
 {
     PrimaryComponentTick.bCanEverTick = true;
+}
+
+void UTransfigurationCastingComponent::BeginPlay()
+{
+    Super::BeginPlay();
+    const UTransfigurationRegistry* Reg = GetSpellRegistry();
+    if (!Reg) return;
+
+    if (bAllSpellsKnownForTesting)
+    {
+        for (const auto& Pair : Reg->SpellTable)
+        {
+            if (Pair.Value) KnownSpells.AddUnique(Pair.Key);
+        }
+    }
+    KnownSpells.RemoveAll([Reg](const FName& Id) { return !Reg->GetSpell(Id); });
+
+    EquippedSpells.SetNum(WheelSlots);
+    for (FName& Id : EquippedSpells)
+    {
+        if (!Id.IsNone() && !KnownSpells.Contains(Id)) Id = NAME_None;
+    }
+    if (!EquippedSpells.ContainsByPredicate([](const FName& Id) { return !Id.IsNone(); }))
+    {
+        // Starter wheel: one of each element first, then whatever else is known.
+        static const TCHAR* Starter[] = { TEXT("FireBlast"), TEXT("FrostNova"), TEXT("ChainLightning"), TEXT("EarthSpike"),
+            TEXT("VoidRift"), TEXT("ThunderStep"), TEXT("StonePillar"), TEXT("HealingSigil") };
+        int32 Slot = 0;
+        for (const TCHAR* Name : Starter)
+        {
+            if (Slot < WheelSlots && KnownSpells.Contains(FName(Name))) EquippedSpells[Slot++] = FName(Name);
+        }
+        for (const FName& Id : GetKnownSpellIDs())
+        {
+            if (Slot >= WheelSlots) break;
+            if (!EquippedSpells.Contains(Id)) EquippedSpells[Slot++] = Id;
+        }
+    }
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Spellbook: %d known, wheel: %s"), KnownSpells.Num(),
+        *FString::JoinBy(EquippedSpells, TEXT(", "), [](const FName& N) { return N.IsNone() ? FString(TEXT("-")) : N.ToString(); }));
+}
+
+double UTransfigurationCastingComponent::NowSeconds() const
+{
+    return GetWorld() ? GetWorld()->GetRealTimeSeconds() : 0.0;
+}
+
+void UTransfigurationCastingComponent::Toast(const FString& Text, const FLinearColor& Color) const
+{
+    if (UCombatFeedbackSubsystem* Feedback = UCombatFeedbackSubsystem::Get(this)) Feedback->AddToast(Text, Color);
+}
+
+TArray<FName> UTransfigurationCastingComponent::GetKnownSpellIDs() const
+{
+    TArray<FName> Out = KnownSpells;
+    const UTransfigurationRegistry* Reg = GetSpellRegistry();
+    Out.Sort([Reg](const FName& A, const FName& B)
+    {
+        const UTransfigurationDefinition* DA = Reg ? Reg->GetSpell(A) : nullptr;
+        const UTransfigurationDefinition* DB = Reg ? Reg->GetSpell(B) : nullptr;
+        const int32 EA = DA ? static_cast<int32>(DA->Element) : 99;
+        const int32 EB = DB ? static_cast<int32>(DB->Element) : 99;
+        return EA != EB ? EA < EB : A.LexicalLess(B);
+    });
+    return Out;
+}
+
+void UTransfigurationCastingComponent::EquipSpell(int32 Slot, FName SpellID)
+{
+    if (Slot < 0 || Slot >= WheelSlots) return;
+    EquippedSpells.SetNum(WheelSlots);
+    if (!SpellID.IsNone())
+    {
+        if (!KnownSpells.Contains(SpellID)) return;
+        const int32 Existing = EquippedSpells.IndexOfByKey(SpellID);
+        if (Existing != INDEX_NONE) EquippedSpells[Existing] = EquippedSpells[Slot];   // swap
+    }
+    EquippedSpells[Slot] = SpellID;
+}
+
+bool UTransfigurationCastingComponent::LearnSpell(FName SpellID)
+{
+    const UTransfigurationRegistry* Reg = GetSpellRegistry();
+    const UTransfigurationDefinition* Def = Reg ? Reg->GetSpell(SpellID) : nullptr;
+    if (!Def || KnownSpells.Contains(SpellID)) return false;
+    KnownSpells.Add(SpellID);
+    EquippedSpells.SetNum(WheelSlots);
+    const int32 Free = EquippedSpells.IndexOfByKey(NAME_None);
+    if (Free != INDEX_NONE) EquippedSpells[Free] = SpellID;
+    Toast(FString::Printf(TEXT("Learned %s"), *Def->DisplayName.ToString()), Def->GetSpellColor());
+    return true;
+}
+
+float UTransfigurationCastingComponent::GetCooldownRemaining(FName SpellID) const
+{
+    const double* Ready = CooldownReadyAt.Find(SpellID);
+    return Ready ? FMath::Max(static_cast<float>(*Ready - NowSeconds()), 0.f) : 0.f;
+}
+
+UTransfigurationDefinition* UTransfigurationCastingComponent::GetSpellDefinition(FName SpellID) const
+{
+    const UTransfigurationRegistry* Reg = GetSpellRegistry();
+    return Reg ? Reg->GetSpell(SpellID) : nullptr;
 }
 
 void UTransfigurationCastingComponent::TickComponent(
@@ -129,6 +233,13 @@ void UTransfigurationCastingComponent::BeginDrawMode(FName SpellID)
     if (!CanAffordSpell(SpellID))
     {
         UE_LOG(LogTemp, Warning, TEXT("Cannot afford spell: %s"), *SpellID.ToString());
+        Toast(TEXT("Not enough mana"), FLinearColor(0.4f, 0.6f, 1.f));
+        return;
+    }
+    const float Cooldown = GetCooldownRemaining(SpellID);
+    if (Cooldown > 0.f)
+    {
+        Toast(FString::Printf(TEXT("%s ready in %.1fs"), *SpellID.ToString(), Cooldown), FLinearColor(0.8f, 0.8f, 0.8f));
         return;
     }
 
@@ -206,6 +317,9 @@ void UTransfigurationCastingComponent::ConfirmPlacement()
         Sigil->Initialize(SpellDef, GetOwner());
         ActiveSigils.Add(Sigil);
         OnPlacementConfirmed(Sigil);
+        if (SpellDef->CooldownDuration > 0.f) CooldownReadyAt.Add(ActiveSpellID, NowSeconds() + SpellDef->CooldownDuration);
+        // Instant spells (dashes, self buffs) go off as soon as they're placed.
+        if (SpellDef->TriggerType == ESigilTriggerType::OnPlace) Sigil->TriggerManual();
         UE_LOG(LogTemp, Warning, TEXT("[TM] Sigil placed: %s (%s) on %s, %d active"),
             *ActiveSpellID.ToString(), *SigilClass->GetName(), *GetNameSafe(CurrentAimHit.GetActor()), ActiveSigils.Num());
     }
@@ -240,14 +354,19 @@ bool UTransfigurationCastingComponent::CastAtAim(FName SpellID)
 TArray<FName> UTransfigurationCastingComponent::GetAvailableSpellIDs() const
 {
     TArray<FName> Result;
-    if (const UTransfigurationRegistry* Reg = GetSpellRegistry())
+    const UTransfigurationRegistry* Reg = GetSpellRegistry();
+    for (const FName& Id : EquippedSpells)
+    {
+        if (!Id.IsNone() && Reg && Reg->GetSpell(Id)) Result.Add(Id);
+    }
+    if (Result.Num() == 0) Result = GetKnownSpellIDs();
+    if (Result.Num() == 0 && Reg)
     {
         for (const auto& Pair : Reg->SpellTable)
         {
             if (Pair.Value) Result.Add(Pair.Key);   // skip entries pointing at missing assets
         }
     }
-    Result.Sort([](const FName& A, const FName& B) { return A.LexicalLess(B); });
     return Result;
 }
 

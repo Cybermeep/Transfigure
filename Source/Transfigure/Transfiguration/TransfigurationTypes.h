@@ -24,7 +24,9 @@ enum class ESigilTriggerType : uint8
     ProximityEnemy UMETA(DisplayName = "ProximityEnemy"),
     ProximityAny UMETA(DisplayName = "ProximityAny"),
     TimedAuto UMETA(DisplayName = "TimedAuto"),
-    Stepped UMETA(DisplayName = "Stepped")
+    Stepped UMETA(DisplayName = "Stepped"),
+    /** Fires the moment it's placed (dashes, self buffs, instant casts). */
+    OnPlace UMETA(DisplayName = "On Place (instant)")
 };
 
 UENUM(BlueprintType)

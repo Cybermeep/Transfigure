@@ -11,6 +11,9 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "RingWorldGeometry.h"
 #include "RingWorldSettings.h"
+#include "Transfiguration/StatusEffectComponent.h"
+#include "Combat/CombatFeedbackSubsystem.h"
+#include "Templates/UnrealTemplate.h"
 
 ABaseEnemy::ABaseEnemy()
 {
@@ -20,6 +23,8 @@ ABaseEnemy::ABaseEnemy()
     HealthBarWidget->SetupAttachment(RootComponent);
     HealthBarWidget->SetWidgetSpace(EWidgetSpace::Screen);
     HealthBarWidget->SetDrawSize(FVector2D(100, 20));
+
+    Status = CreateDefaultSubobject<UStatusEffectComponent>(TEXT("Status"));
 
     // Get an AI controller whether placed in the map or spawned by a pool.
     AutoPossessAI = EAutoPossessAI::PlacedInWorldOrSpawned;
@@ -102,6 +107,7 @@ void ABaseEnemy::OnSpawnFromPool()
 {
     bIsAlive = true;
     Health = MaxHealth;
+    if (Status) Status->ClearAll();
     CurrentState = EEnemyState::Idle;
     AlertnessLevel = 1.0f;
     bDirectChase = false;
@@ -125,6 +131,7 @@ void ABaseEnemy::OnSpawnFromPool()
 
 void ABaseEnemy::OnReturnToPool()
 {
+    if (Status) Status->ClearAll();
     bIsAlive = false;
     CurrentState = EEnemyState::Dead;
     GetWorldTimerManager().ClearAllTimersForObject(this);
@@ -210,7 +217,7 @@ void ABaseEnemy::UpdateChase()
     bDirectChase = bFailed;
 
     const float Now = GetWorld()->GetTimeSeconds();
-    if (Distance <= AttackRange && Now - LastAttackTime >= AttackCooldown)
+    if (Distance <= AttackRange && Now - LastAttackTime >= AttackCooldown && !(Status && Status->BlocksAttack()))
     {
         LastAttackTime = Now;
         UGameplayStatics::ApplyDamage(Player, AttackDamage, AI, this, UDamageType::StaticClass());
@@ -234,15 +241,20 @@ void ABaseEnemy::ApplyStun(float Duration)
 {
     if (!bIsAlive) return;
     CurrentState = EEnemyState::Stunned;
-    GetCharacterMovement()->DisableMovement();
-    GetWorldTimerManager().SetTimer(StunTimerHandle, this, &ABaseEnemy::EndStun, Duration, false);
+    // Stop chasing, but don't freeze physics: a stunned enemy that was knocked into
+    // the air still has to fall (was DisableMovement, which left launched enemies hanging).
+    if (AAIController* AI = Cast<AAIController>(GetController())) AI->StopMovement();
+    bDirectChase = false;
+    if (GetCharacterMovement()->IsMovingOnGround()) GetCharacterMovement()->StopMovementImmediately();
+    // A longer stun is never cut short by a shorter one.
+    const float Remaining = GetWorldTimerManager().IsTimerActive(StunTimerHandle) ? GetWorldTimerManager().GetTimerRemaining(StunTimerHandle) : 0.f;
+    GetWorldTimerManager().SetTimer(StunTimerHandle, this, &ABaseEnemy::EndStun, FMath::Max(Duration, Remaining), false);
 }
 
 void ABaseEnemy::EndStun()
 {
     if (!bIsAlive) return;
     CurrentState = EEnemyState::Combat;
-    GetCharacterMovement()->SetMovementMode(MOVE_Walking);
 }
 
 // All engine damage funnels into TakePoolDamage, so there is exactly one
@@ -284,6 +296,10 @@ void ABaseEnemy::TakePoolDamage(float DamageAmount, FVector HitLocation)
 {
     if (!bIsAlive) return;
 
+    // Resistances (body, not machine parts) and Marked / Voided.
+    DamageAmount *= GetElementScale(PendingElement, false);
+    if (Status) DamageAmount *= Status->GetDamageTakenMultiplier();
+
     Health -= DamageAmount;
     CurrentState = EEnemyState::Combat;
     OnDamageEffects(HitLocation);
@@ -293,6 +309,40 @@ void ABaseEnemy::TakePoolDamage(float DamageAmount, FVector HitLocation)
     if (Health <= 0.0f)
     {
         Die();
+    }
+    if (UCombatFeedbackSubsystem* Feedback = UCombatFeedbackSubsystem::Get(this))
+    {
+        Feedback->ReportDamage(GetActorLocation() + GetRingUp() * 100.f, DamageAmount, PendingElement, !bIsAlive);
+    }
+}
+
+void ABaseEnemy::TakeSpellDamage(float Damage, FVector HitLocation, ETransfigurationElement Element)
+{
+    TGuardValue<ETransfigurationElement> Guard(PendingElement, Element);
+    TakePoolDamage(Damage, HitLocation);
+}
+
+void ABaseEnemy::TakeSpellAreaDamage(float Damage, FVector Origin, float InnerRadius, float OuterRadius, ETransfigurationElement Element)
+{
+    TGuardValue<ETransfigurationElement> Guard(PendingElement, Element);
+    TakeAreaDamage(Damage, Origin, InnerRadius, OuterRadius);
+}
+
+void ABaseEnemy::TakeStatusDamage(float Damage, ETransfigurationElement Element)
+{
+    TakeSpellDamage(Damage, GetActorLocation(), Element);
+}
+
+float ABaseEnemy::GetElementScale(ETransfigurationElement Element, bool bMachinePart) const
+{
+    if (!bMachinePart) return 1.f;
+    // Robot parts: fire barely scorches them, lightning fries them, cold makes them brittle-ish.
+    switch (Element)
+    {
+    case ETransfigurationElement::Fire:      return 0.5f;
+    case ETransfigurationElement::Lightning: return 2.0f;
+    case ETransfigurationElement::Ice:       return 0.75f;
+    default:                                 return 1.f;
     }
 }
 

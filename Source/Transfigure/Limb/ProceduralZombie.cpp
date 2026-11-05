@@ -14,6 +14,8 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Kismet/GameplayStatics.h"
+#include "Transfiguration/StatusEffectComponent.h"
+#include "Templates/UnrealTemplate.h"
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "PhysicsEngine/SkeletalBodySetup.h"
 #include "RingFrameUtils.h"
@@ -892,7 +894,7 @@ void AProceduralZombie::TakeAreaDamage(float Damage, FVector Origin, float Inner
     {
         FLimbPartRuntime& State = PartState[Hit.Key];
         if (!State.bAttached) continue;   // already taken with a severed parent
-        State.Health -= Damage * Hit.Value;
+        State.Health -= Damage * Hit.Value * PartDamageScale(State);
         if (State.Health <= 0.f && State.Spec.bSeverable)
         {
             bLostHead |= State.Spec.Part == ELimbPart::Head;
@@ -919,14 +921,18 @@ void AProceduralZombie::TakePoolDamage(float DamageAmount, FVector HitLocation)
     {
         FLimbPartRuntime& State = PartState[PartIdx];
         BodyDamage *= State.Spec.BodyDamageMultiplier;
-        State.Health -= DamageAmount;
+        const float PartDamage = DamageAmount * PartDamageScale(State);
+        State.Health -= PartDamage;
 
         UE_LOG(LogTemp, Warning, TEXT("[TM] %s: %s%s hit for %.0f (part health %.0f)"), *GetName(),
             State.bMechanical ? TEXT("machine ") : TEXT(""),
-            *UEnum::GetValueAsString(State.Spec.Part), DamageAmount, FMath::Max(State.Health, 0.f));
+            *UEnum::GetValueAsString(State.Spec.Part), PartDamage, FMath::Max(State.Health, 0.f));
 
-        if (State.Health <= 0.f && State.Spec.bSeverable)
+        // Frozen solid: whatever limb you hit shatters.
+        const bool bShatter = Status && Status->IsFrozen() && State.Spec.Part != ELimbPart::Torso;
+        if ((State.Health <= 0.f || bShatter) && State.Spec.bSeverable)
         {
+            if (bShatter) UE_LOG(LogTemp, Warning, TEXT("[TM] %s: frozen %s SHATTERED"), *GetName(), *UEnum::GetValueAsString(State.Spec.Part));
             SeverPart(PartIdx, HitLocation);
         }
     }
@@ -1039,6 +1045,78 @@ void AProceduralZombie::SeverPart(int32 Index, const FVector& HitLocation)
         Root.bMechanical ? TEXT("machine ") : TEXT(""), *UEnum::GetValueAsString(Root.Spec.Part), Take.Num());
 
     UpdateCripple();
+}
+
+float AProceduralZombie::PartDamageScale(const FLimbPartRuntime& State) const
+{
+    float Scale = GetElementScale(PendingElement, State.bMechanical);
+    if (PendingElement == ETransfigurationElement::Earth && IsLeg(State.Spec.Part)) Scale *= 1.5f;   // crushes legs
+    if (Status && Status->IsFrozen()) Scale *= 3.f;                                                  // brittle
+    return Scale;
+}
+
+FVector AProceduralZombie::PartLocation(int32 Index) const
+{
+    if (PartState.IsValidIndex(Index) && PartState[Index].HitZone) return PartState[Index].HitZone->GetComponentLocation();
+    return GetActorLocation();
+}
+
+float AProceduralZombie::GetElementScale(ETransfigurationElement Element, bool bMachinePart) const
+{
+    float Scale = Super::GetElementScale(Element, bMachinePart);
+    if (CurrentArchetype == TEXT("Bloat") && Element == ETransfigurationElement::Fire) Scale *= 1.5f;
+    else if (CurrentArchetype == TEXT("Gaunt") && Element == ETransfigurationElement::Ice) Scale *= 0.6f;
+    else if (CurrentArchetype == TEXT("Gaunt") && Element == ETransfigurationElement::Lightning) Scale *= 1.2f;
+    else if (CurrentArchetype == TEXT("Husk") && Element == ETransfigurationElement::Void) Scale *= 1.2f;
+    return Scale;
+}
+
+void AProceduralZombie::TakeStatusDamage(float Damage, ETransfigurationElement Element)
+{
+    // Burning eats at a random limb as well, so a burning zombie starts falling apart.
+    TArray<int32> Limbs;
+    for (int32 i = 0; i < PartState.Num(); ++i)
+    {
+        if (PartState[i].bAttached && PartState[i].Spec.bSeverable && PartState[i].Spec.Part != ELimbPart::Torso) Limbs.Add(i);
+    }
+    TGuardValue<ETransfigurationElement> Guard(PendingElement, Element);
+    if (Limbs.Num() > 0)
+    {
+        const int32 Idx = Limbs[FMath::RandRange(0, Limbs.Num() - 1)];
+        FLimbPartRuntime& State = PartState[Idx];
+        State.Health -= Damage * 0.6f * PartDamageScale(State);
+        if (State.Health <= 0.f)
+        {
+            const bool bHead = State.Spec.Part == ELimbPart::Head;
+            SeverPart(Idx, PartLocation(Idx));
+            if (bHead && bIsAlive) ABaseEnemy::TakePoolDamage(Health, GetActorLocation());
+        }
+    }
+    // Body damage directly (not through our part logic, which would hit the torso again).
+    ABaseEnemy::TakePoolDamage(Damage, GetActorLocation());
+}
+
+bool AProceduralZombie::SeverNearestLimb(const FVector& From)
+{
+    int32 Best = INDEX_NONE;
+    float BestDist = BIG_NUMBER;
+    for (int32 i = 0; i < PartState.Num(); ++i)
+    {
+        const FLimbPartRuntime& State = PartState[i];
+        if (!State.bAttached || !State.Spec.bSeverable || State.Spec.Part == ELimbPart::Torso) continue;
+        const float D = DistanceToPart(i, From);
+        if (D < BestDist)
+        {
+            BestDist = D;
+            Best = i;
+        }
+    }
+    if (Best == INDEX_NONE) return false;
+    const bool bHead = PartState[Best].Spec.Part == ELimbPart::Head;
+    UE_LOG(LogTemp, Warning, TEXT("[TM] %s: limb torn off by the void"), *GetName());
+    SeverPart(Best, From);
+    if (bHead && bIsAlive) ABaseEnemy::TakePoolDamage(Health, From);
+    return true;
 }
 
 void AProceduralZombie::UpdateCripple()

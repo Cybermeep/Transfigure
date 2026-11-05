@@ -23,6 +23,9 @@
 #include "Grapple/GrappleComponent.h"
 #include "Combat/WeaponComponent.h"
 #include "Character/TMHUD.h"
+#include "Transfiguration/SpellStructure.h"
+#include "Combat/CombatFeedbackSubsystem.h"
+#include "Kismet/GameplayStatics.h"
 #include "Enemy/BaseEnemy.h"
 #include "Transfigure.h"
 #include "Destruction/DestructionManager.h"
@@ -87,6 +90,12 @@ void ATMCharacter::BeginPlay()
     }
     SetupFirstPersonCamera();
     DefaultBrakingDecelerationWalking = GetCharacterMovement()->BrakingDecelerationWalking;
+    // The selected spell has to be on the wheel (the casting component set the wheel up in Super::BeginPlay).
+    if (TransfigurationCasting)
+    {
+        const TArray<FName> Wheel = TransfigurationCasting->GetAvailableSpellIDs();
+        if (Wheel.Num() > 0 && !Wheel.Contains(DrawSigilSpellID)) DrawSigilSpellID = Wheel[0];
+    }
     if (!GetMesh() || !GetMesh()->GetSkeletalMeshAsset())
     {
         UE_LOG(LogTemp, Warning, TEXT("[TM] %s has no skeletal mesh assigned - the player will be invisible"), *GetName());
@@ -214,7 +223,7 @@ void ATMCharacter::UpdateRingGravity(float DeltaTime)
     {
         // Ease out any yaw offset left by a facing snap.
         CameraYawOffset = FMath::FInterpTo(CameraYawOffset, 0.0f, DeltaTime, CameraRecenterSpeed);
-        CameraPitchTarget->SetRelativeRotation(FRotator(CameraPitch, CameraYawOffset, CameraRoll + CameraFlipRoll));
+        CameraPitchTarget->SetRelativeRotation(FRotator(CameraPitch, CameraYawOffset, CameraRoll + CameraFlipRoll) + CameraShakeRot);
     }
 }
 
@@ -298,15 +307,50 @@ void ATMCharacter::UpdateCameraEffects(float DeltaTime)
     const float FOVSpeed = (bIsTemporalActive && TargetFOV > CurrentFOV) ? TemporalFOVChangeSpeed : FOVChangeSpeed;
     CurrentFOV = FMath::FInterpTo(CurrentFOV, TargetFOV, DeltaTime, FOVSpeed);
     FOVKick = FMath::FInterpTo(FOVKick, 0.f, DeltaTime, 5.f);
+
+    // Shake: smooth noise, strength = trauma squared (small hits barely move it, big ones jolt).
+    CameraShakeTrauma = FMath::Max(CameraShakeTrauma - DeltaTime * 1.6f, 0.f);
+    CameraShakeTime += DeltaTime;
+    const float Shake = CameraShakeTrauma * CameraShakeTrauma;
+    CameraShakeRot = FRotator(
+        FMath::PerlinNoise1D(CameraShakeTime * 23.f) * 4.f * Shake,
+        FMath::PerlinNoise1D(CameraShakeTime * 23.f + 37.f) * 4.f * Shake,
+        FMath::PerlinNoise1D(CameraShakeTime * 19.f + 71.f) * 3.f * Shake);
     if (ViewCamera)
     {
         ViewCamera->SetFieldOfView(CurrentFOV + FOVKick);
     }
 }
 
+float ATMCharacter::GetDamageMultiplier() const
+{
+    float M = CurrentDamageMultiplier;
+    if (BuffEffects && BuffEffects->HasBuff(EBuffType::Damage)) M *= BuffEffects->GetBuffMultiplier(EBuffType::Damage);
+    return M;
+}
+
 void ATMCharacter::UpdateMomentumBraking()
 {
     UCharacterMovementComponent* CMC = GetCharacterMovement();
+
+    // Ice (slippery spell structures): no friction, no braking - you keep everything.
+    const ASpellStructure* FloorStructure = CMC->IsMovingOnGround() ? Cast<ASpellStructure>(CMC->CurrentFloor.HitResult.GetActor()) : nullptr;
+    if (FloorStructure && FloorStructure->IsSlippery())
+    {
+        if (!bOnSlipperyFloor) SavedGroundFriction = CMC->GroundFriction;
+        bOnSlipperyFloor = true;
+        CMC->GroundFriction = 0.f;
+        CMC->bUseSeparateBrakingFriction = true;
+        CMC->BrakingFriction = 0.f;
+        CMC->BrakingDecelerationWalking = 0.f;
+        bOverspeedBraking = true;   // so normal braking is restored once off the ice
+        return;
+    }
+    if (bOnSlipperyFloor)
+    {
+        CMC->GroundFriction = SavedGroundFriction;
+        bOnSlipperyFloor = false;
+    }
     if (CurrentStateName == TEXT("Slide"))
     {
         // The slide sets its own friction; just hand back the friction mode.
@@ -423,6 +467,14 @@ void ATMCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
     EIC->BindAction(IA_PlaceSigil, ETriggerEvent::Completed, this, &ATMCharacter::OnPlaceSigilReleased);
     EIC->BindAction(IA_TriggerSigil, ETriggerEvent::Started, this, &ATMCharacter::OnTriggerSigilPressed);
     EIC->BindAction(IA_TriggerAll, ETriggerEvent::Started, this, &ATMCharacter::OnTriggerAllPressed);
+    if (!IA_Spellbook)
+    {
+        IA_Spellbook = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/IA_Spellbook.IA_Spellbook"), nullptr, LOAD_NoWarn | LOAD_Quiet);
+    }
+    if (IA_Spellbook)
+    {
+        EIC->BindAction(IA_Spellbook, ETriggerEvent::Started, this, &ATMCharacter::ToggleSpellbook);
+    }
 
     // Temporal Input
     EIC->BindAction(IA_TemporalClap, ETriggerEvent::Started, this, &ATMCharacter::OnTemporalClapPressed);
@@ -457,6 +509,7 @@ void ATMCharacter::OnMove(const FInputActionValue& Value)
 
 void ATMCharacter::OnLook(const FInputActionValue& Value)
 {
+    if (bSpellbookOpen) return;   // the mouse is a cursor in the spellbook
     FVector2D Vec = Value.Get<FVector2D>();
 
     if (bSpellWheelOpen)
@@ -551,7 +604,12 @@ float ATMCharacter::TakeDamage(float DamageAmount, FDamageEvent const& DamageEve
     if (DamageCauser == this || EventInstigator == GetController()) return 0.f;
 
     const float Applied = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
-    Health = FMath::Max(0.f, Health - Applied);
+    // Defence buff (Rock Armour).
+    float Taken = Applied;
+    if (BuffEffects && BuffEffects->HasBuff(EBuffType::Defense)) Taken /= FMath::Max(BuffEffects->GetBuffMultiplier(EBuffType::Defense), 0.1f);
+    Health = FMath::Max(0.f, Health - Taken);
+    LastHurtTime = GetWorld()->GetRealTimeSeconds();
+    AddCameraShake(0.35f);
     UE_LOG(LogTemp, Warning, TEXT("[TM] Player took %.0f damage from %s, health %.0f"),
         Applied, *GetNameSafe(DamageCauser), Health);
     return Applied;
@@ -561,6 +619,15 @@ float ATMCharacter::TakeDamage(float DamageAmount, FDamageEvent const& DamageEve
 
 void ATMCharacter::OnFirePressed()
 {
+    // Spellbook open: left click picks spells and slots.
+    if (bSpellbookOpen)
+    {
+        if (APlayerController* PC = Cast<APlayerController>(GetController()))
+        {
+            if (ATMHUD* HUD = Cast<ATMHUD>(PC->GetHUD())) HUD->SpellbookClick();
+        }
+        return;
+    }
     // On a launch pad, aiming at the ring: click launches you there instead of shooting.
     if (LaunchComponent && (LaunchComponent->IsFlying() || LaunchComponent->TryLaunch())) return;
     if (WeaponComponent) WeaponComponent->FireWeapon();
@@ -575,6 +642,7 @@ void ATMCharacter::OnDrawSigilPressed()
 
 void ATMCharacter::OnPlaceSigilPressed()
 {
+    if (bSpellbookOpen) return;
     // Start the hold timer; if Q is still down when it fires, the wheel opens.
     GetWorldTimerManager().SetTimer(SpellWheelOpenTimer, this, &ATMCharacter::OpenSpellWheel,
         SpellWheelHoldTime, false);
@@ -582,6 +650,7 @@ void ATMCharacter::OnPlaceSigilPressed()
 
 void ATMCharacter::OnPlaceSigilReleased()
 {
+    if (bSpellbookOpen) return;
     if (bSpellWheelOpen)
     {
         CloseSpellWheel();
@@ -613,6 +682,41 @@ void ATMCharacter::CloseSpellWheel()
         DrawSigilSpellID = SpellWheelOptions[SpellWheelHighlighted];
     }
     UE_LOG(LogTemp, Warning, TEXT("[TM] Spell wheel closed, selected %s"), *DrawSigilSpellID.ToString());
+}
+
+void ATMCharacter::ToggleSpellbook()
+{
+    APlayerController* PC = Cast<APlayerController>(GetController());
+    if (!PC) return;
+    if (bSpellWheelOpen) CloseSpellWheel();
+    bSpellbookOpen = !bSpellbookOpen;
+
+    if (bSpellbookOpen)
+    {
+        PC->SetShowMouseCursor(true);
+        FInputModeGameAndUI Mode;
+        Mode.SetHideCursorDuringCapture(false);
+        Mode.SetLockMouseToViewportBehavior(EMouseLockMode::LockAlways);
+        PC->SetInputMode(Mode);
+        int32 W = 0, H = 0;
+        PC->GetViewportSize(W, H);
+        PC->SetMouseLocation(W / 2, H / 2);
+        // The world crawls while you browse (unless the temporal clap already owns time).
+        if (!bIsTemporalActive) UGameplayStatics::SetGlobalTimeDilation(GetWorld(), 0.1f);
+    }
+    else
+    {
+        PC->SetShowMouseCursor(false);
+        PC->SetInputMode(FInputModeGameOnly());
+        if (!bIsTemporalActive) UGameplayStatics::SetGlobalTimeDilation(GetWorld(), 1.f);
+        // The selected spell has to still be on the wheel.
+        if (TransfigurationCasting)
+        {
+            const TArray<FName> Wheel = TransfigurationCasting->GetAvailableSpellIDs();
+            if (Wheel.Num() > 0 && !Wheel.Contains(DrawSigilSpellID)) DrawSigilSpellID = Wheel[0];
+        }
+    }
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Spellbook %s"), bSpellbookOpen ? TEXT("opened") : TEXT("closed"));
 }
 
 void ATMCharacter::OnTriggerSigilPressed()

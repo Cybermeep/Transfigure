@@ -4,9 +4,11 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
+#include "Transfiguration/TransfigurationTypes.h"
 #include "BaseEnemy.generated.h"
 
 class AEnemyObjectPool;
+class UStatusEffectComponent;
 class UWidgetComponent;
 class ABaseEnemy;
 
@@ -48,6 +50,22 @@ public:
      * every body part in range (so blasts can take several limbs at once).
      */
     virtual void TakeAreaDamage(float Damage, FVector Origin, float InnerRadius, float OuterRadius);
+
+    /** Spell / elemental damage: like TakePoolDamage, scaled by this enemy's resistances and status. */
+    virtual void TakeSpellDamage(float Damage, FVector HitLocation, ETransfigurationElement Element);
+
+    /** Elemental TakeAreaDamage. */
+    virtual void TakeSpellAreaDamage(float Damage, FVector Origin, float InnerRadius, float OuterRadius, ETransfigurationElement Element);
+
+    /** Damage over time from a status (Burning). */
+    virtual void TakeStatusDamage(float Damage, ETransfigurationElement Element);
+
+    /** How much of an element's damage this enemy (or one of its machine parts) takes. 1 = normal. */
+    virtual float GetElementScale(ETransfigurationElement Element, bool bMachinePart) const;
+
+    /** Status effects (burning, chilled/frozen, shocked, marked, staggered, voided). */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Enemy|Status")
+    TObjectPtr<UStatusEffectComponent> Status;
 
     /** Falloff used by TakeAreaDamage: 1 inside Inner, 0.5 at Outer, 0 beyond. */
     static float AreaFalloff(float Distance, float InnerRadius, float OuterRadius);
@@ -153,6 +171,9 @@ protected:
     FTimerHandle StunTimerHandle;
     float BaseMaxWalkSpeed = 600.f;
     float LastAttackTime = -1000.f;
+
+    /** Element of the damage being applied right now (set by TakeSpell*Damage), for per-part scaling. */
+    ETransfigurationElement PendingElement = ETransfigurationElement::None;
 
     /** True when pathfinding failed (e.g. no nav mesh): walk straight at the player instead. */
     bool bDirectChase = false;

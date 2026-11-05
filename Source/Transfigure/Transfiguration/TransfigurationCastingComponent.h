@@ -37,9 +37,41 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Casting")
         bool CastAtAim(FName SpellID);
 
-    /** Every spell key in DA_SpellRegistry (sorted), for the spell wheel. */
+    /** The spells on the wheel (equipped slots, in order). Falls back to every known spell. */
     UFUNCTION(BlueprintCallable, Category = "Casting")
         TArray<FName> GetAvailableSpellIDs() const;
+
+    // ── Spellbook (SPELL_PLAN C1) ──
+    /** Spells you know. With bAllSpellsKnownForTesting the whole registry is known. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Casting|Spellbook")
+        TArray<FName> KnownSpells;
+
+    /** The spell wheel: WheelSlots entries, None = empty slot. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Casting|Spellbook")
+        TArray<FName> EquippedSpells;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Casting|Spellbook")
+        bool bAllSpellsKnownForTesting = true;
+
+    static constexpr int32 WheelSlots = 8;
+
+    /** Known spells, sorted by element then name (spellbook order). */
+    UFUNCTION(BlueprintCallable, Category = "Casting|Spellbook")
+        TArray<FName> GetKnownSpellIDs() const;
+
+    /** Put a known spell in a wheel slot (moves it if it's already in another slot). None clears the slot. */
+    UFUNCTION(BlueprintCallable, Category = "Casting|Spellbook")
+        void EquipSpell(int32 Slot, FName SpellID);
+
+    /** Learn a spell (fills a free wheel slot). False if unknown to the registry or already known. */
+    UFUNCTION(BlueprintCallable, Category = "Casting|Spellbook")
+        bool LearnSpell(FName SpellID);
+
+    UFUNCTION(BlueprintPure, Category = "Casting")
+        float GetCooldownRemaining(FName SpellID) const;
+
+    UFUNCTION(BlueprintPure, Category = "Casting")
+        UTransfigurationDefinition* GetSpellDefinition(FName SpellID) const;
 
     UFUNCTION(BlueprintCallable, Category = "Casting")
         void TriggerNearestManualSigil();
@@ -124,10 +156,16 @@ public:
         TArray<TObjectPtr<ASigilActor>> ActiveSigils;
 
 protected:
+    virtual void BeginPlay() override;
     virtual void TickComponent(float DeltaTime, ELevelTick TickType,
         FActorComponentTickFunction* ThisTickFunction) override;
 
 private:
+    /** Real time each spell is ready again (real time, so the temporal clap's slow-mo doesn't stretch it). */
+    TMap<FName, double> CooldownReadyAt;
+    double NowSeconds() const;
+    void Toast(const FString& Text, const FLinearColor& Color) const;
+
     ECastingState CurrentState = ECastingState::Idle;
     FName ActiveSpellID;
     FHitResult CurrentAimHit;

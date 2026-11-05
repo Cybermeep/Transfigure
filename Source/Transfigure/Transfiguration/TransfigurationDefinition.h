@@ -5,6 +5,8 @@
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
 #include "TransfigurationTypes.h"
+#include "Transfiguration/SpellTypes.h"
+#include "Transfiguration/BuffEffectComponent.h"
 #include "TransfigurationDefinition.generated.h"
 
 class UTransfigurationEffectBase;
@@ -27,6 +29,128 @@ public:
 
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Identity")
         ETransfigurationElement Element = ETransfigurationElement::Fire;
+
+    /** Shown in the spellbook. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Identity", meta = (MultiLine = true))
+        FText Description;
+
+    // ── Behaviour (read by the effect archetypes in SpellEffects.h) ─────────────
+    /** Full damage within this radius of the sigil (cm). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        float ImpactRadius = 300.f;
+
+    /** Damage falls to half at this radius and stops beyond it (cm). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        float FalloffRadius = 600.f;
+
+    /** Push enemies away from the centre (cm/s). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        float Knockback = 0.f;
+
+    /** Throw enemies straight up along ring-up (cm/s). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        float Launch = 0.f;
+
+    /** If the caster is inside ImpactRadius, launch them up too (cm/s): ride your own spell. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        float CasterLaunch = 0.f;
+
+    /** Seconds between triggering and the impact (Meteor). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        float Delay = 0.f;
+
+    /** > 0: keeps hitting every TickInterval for this long (auras, storms, pulls). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        float Duration = 0.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        float TickInterval = 0.5f;
+
+    /** Aura: each tick zaps one random enemy in range instead of everything. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        bool bOneRandomTargetPerTick = false;
+
+    /** Aura: centred on the caster and moves with them (trails, charges). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        bool bFollowCaster = false;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        ESpellStatus Status = ESpellStatus::None;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        float StatusStacks = 1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        float StatusDuration = 4.f;
+
+    /** Chain: how many more enemies it jumps to, and how far each jump reaches (cm). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        int32 ChainCount = 4;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        float ChainRange = 900.f;
+
+    /** Pull: how hard enemies are dragged to the centre (cm/s^2). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        float PullStrength = 2500.f;
+
+    /** Line: gap between strikes, and how fast the wave travels from you to the sigil (cm, cm/s). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        float LineSpacing = 160.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        float LineSpeed = 3000.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        ESpellStructureShape StructureShape = ESpellStructureShape::Wall;
+
+    /** Structure size in cm: width (along the surface), thickness, height. Ramps: width, length unused (spans to you), rise. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        FVector StructureSize = FVector(800.f, 80.f, 500.f);
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        float StructureLifetime = 12.f;
+
+    /** Ice: no friction or braking while you stand on it, so it keeps all your speed. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        bool bStructureSlippery = false;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        ESpellSelfAction SelfAction = ESpellSelfAction::None;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        EBuffType SelfBuff = EBuffType::Speed;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        float SelfBuffMultiplier = 1.5f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        float SelfBuffDuration = 6.f;
+
+    /** Dash to the sigil at this speed (cm/s). Heal: health restored. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        float SelfAmount = 3500.f;
+
+    /** Tears the nearest limb off every zombie it hits (Severing Void). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        bool bSeversNearestLimb = false;
+
+    /** Damage multiplier when the temporal clap sets it off. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        float TemporalDamageMultiplier = 1.5f;
+
+    /** Camera shake when it hits (0..1). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Behaviour")
+        float ImpactShake = 0.3f;
+
+    /** Alpha 0 = use the element's colour. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Visuals")
+        FLinearColor ColorOverride = FLinearColor(0.f, 0.f, 0.f, 0.f);
+
+    FLinearColor GetSpellColor() const
+    {
+        return ColorOverride.A > 0.f ? ColorOverride : USpellLibrary::GetElementColor(bIsHealingSigil || bIsBuffSigil ? ETransfigurationElement::None : Element);
+    }
 
     // Persistent Sigil Types
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Spell|Identity")

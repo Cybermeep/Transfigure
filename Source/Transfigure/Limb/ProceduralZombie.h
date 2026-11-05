@@ -150,6 +150,12 @@ public:
     virtual void TakePoolDamage(float DamageAmount, FVector HitLocation) override;
     virtual void TakeAreaDamage(float Damage, FVector Origin, float InnerRadius, float OuterRadius) override;
     virtual void OnSpawnFromPool() override;
+    virtual void TakeStatusDamage(float Damage, ETransfigurationElement Element) override;
+    /** Archetype weaknesses on top of the machine-part rules: Bloats burst under fire, Gaunts shrug off cold. */
+    virtual float GetElementScale(ETransfigurationElement Element, bool bMachinePart) const override;
+
+    /** Tear off the limb closest to From (Severing Void). False if none is left. */
+    bool SeverNearestLimb(const FVector& From);
 
 protected:
     virtual void BeginPlay() override;
@@ -180,6 +186,9 @@ private:
     UMaterialInterface* GetMaterial(ELimbMaterial Kind) const;
 
     int32 FindHitPart(const FVector& HitLocation) const;
+    /** Part damage multiplier for the damage being applied now (element, machine part, Earth vs legs, frozen). */
+    float PartDamageScale(const FLimbPartRuntime& State) const;
+    FVector PartLocation(int32 Index) const;
     /** Distance from Location to part Index's hit-zone surface. */
     float DistanceToPart(int32 Index, const FVector& Location) const;
     void SeverPart(int32 Index, const FVector& HitLocation);
