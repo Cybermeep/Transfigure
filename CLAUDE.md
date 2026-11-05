@@ -31,6 +31,18 @@ Python Editor Script Plugin is enabled. Scripts live in `Tools/`. Run headless (
 
 Never edit `.uasset` / `.umap` as text. Inspect with Python, then give the owner exact editor clicks.
 
+Exporting a skeletal mesh (FBX) from a commandlet needs `-AllowCommandletRendering`, otherwise it asserts (`MeshObject`).
+
+## Blender zombie body pipeline (`Tools/blender/`)
+
+Blender 5.0: `C:\Program Files\Blender Foundation\Blender 5.0\blender.exe`. Always run headless with `--background --factory-startup`.
+
+1. `Tools/export_mannequin_fbx.py` (UE commandlet + `-AllowCommandletRendering`) writes `Tools/blender/input/SKM_Manny_Simple.fbx`.
+2. `blender --background --factory-startup --python Tools/blender/zombie_body_gen.py -- --fbx Tools/blender/input/SKM_Manny_Simple.fbx --archetype Husk|Bloat|Gaunt --seed N --out Tools/blender/output` → `<Arch>_<NNN>.blend` (owner can sculpt it), `.fbx`, and `output/previews/*.png`. Takes ~3 s plus ~10 s of renders.
+3. `python Tools/blender/montage.py <out.png> front|threequarter|side Husk_001 Bloat_001 ...` makes a comparison sheet.
+
+Gotchas: the imported mesh is in **centimetres** under a 0.01-scale parent empty — do geometry in local space, never delete that empty (deleting it once made the remesh try to allocate 65 GB). The mesh duplicates vertices on UV seams — displacements must use a shared normal per position or seams crack and the voxel remesh shreds the body. The generator refuses to remesh above `--max-voxels`. Outputs are git-ignored (regenerated in seconds).
+
 ## Layout (`Source/Transfigure/`)
 
 - `Ringworld/` — spin axis world +Y, ring in XZ. `URingWorldGeometry`, `URingFrameUtils`, `FRingWorldSpec` in `URingWorldSettings` (`Config/DefaultGame.ini`). `bFlatWorldForTesting=True` makes gravity -Z for flat test maps.

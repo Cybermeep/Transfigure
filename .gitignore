@@ -237,3 +237,6 @@ FodyWeavers.xsd
 .ntvs_analysis.dat
 crashlytics-build.properties
 [Ll]ogs/
+# Blender zombie pipeline: regenerated outputs and the exported Mannequin input
+Tools/blender/output/
+Tools/blender/input/
