@@ -185,7 +185,7 @@ void UStatusEffectComponent::UpdateTint()
     {
         const FLinearColor C = USpellLibrary::GetStatusColor(Show);
         Mesh->SetVectorParameterValueOnMaterials(TEXT("GlowColor"), FVector(C.R, C.G, C.B));
-        Mesh->SetScalarParameterValueOnMaterials(TEXT("GlowStrength"), FMath::Max(OriginalGlowStrength, 1.f) * 2.5f);
+        Mesh->SetScalarParameterValueOnMaterials(TEXT("GlowStrength"), FMath::Max(OriginalGlowStrength, 1.f) * 1.25f);
         bTinted = true;
     }
     TintedAs = Show;

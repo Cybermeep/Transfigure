@@ -9,6 +9,9 @@
 
 class UDecalComponent;
 class USphereComponent;
+class UProceduralMeshComponent;
+class UPointLightComponent;
+class UMaterialInstanceDynamic;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
 FOnSigilTriggered, ASigilActor*, TriggeredSigil);
@@ -60,6 +63,20 @@ protected:
 
     UPROPERTY(VisibleDefaultsOnly)
         TObjectPtr<UDecalComponent> SigilDecal;
+
+    /** Glowing glyph: a ring at the spell's reach plus a star in the middle, in the element's colour. */
+    UPROPERTY(VisibleDefaultsOnly)
+        TObjectPtr<UProceduralMeshComponent> Glyph;
+
+    UPROPERTY(VisibleDefaultsOnly)
+        TObjectPtr<UPointLightComponent> Light;
+
+    UPROPERTY()
+        TObjectPtr<UMaterialInstanceDynamic> GlyphMID;
+
+    float VisualAge = 0.f;
+    float FiredAge = -1.f;
+    void BuildGlyph(float RingRadius);
 
     bool bArmed = false;
 

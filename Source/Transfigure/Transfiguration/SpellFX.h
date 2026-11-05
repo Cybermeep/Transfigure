@@ -20,6 +20,7 @@ class UStaticMeshComponent;
 class UMaterialInterface;
 class UMaterialInstanceDynamic;
 class UStaticMesh;
+class UProceduralMeshComponent;
 
 UCLASS(NotPlaceable)
 class TRANSFIGURE_API ASpellFX : public AActor
@@ -52,6 +53,10 @@ private:
 
     UPROPERTY()
     TObjectPtr<UStaticMeshComponent> Mesh;
+
+    /** Discs are drawn as a thin glowing ring (a filled disc lit up the whole floor). */
+    UPROPERTY()
+    TObjectPtr<UProceduralMeshComponent> Ring;
 
     UPROPERTY()
     TObjectPtr<UMaterialInstanceDynamic> MID;

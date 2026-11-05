@@ -7,6 +7,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "DrawDebugHelpers.h"
 #include "Transfigure.h"
+#include "Transfiguration/StatusEffectComponent.h"
 
 UWeaponComponent::UWeaponComponent()
 {
@@ -33,20 +34,7 @@ void UWeaponComponent::TickComponent(float DeltaTime, ELevelTick TickType,
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
     UpdateInfusion(DeltaTime);
 
-#if !UE_BUILD_SHIPPING
-    // Debug aim marker until there is a crosshair: green on an enemy, white elsewhere.
-    if (OwnerCharacter && OwnerCharacter->IsLocallyControlled())
-    {
-        FHitResult Hit;
-        FVector Start, End;
-        if (TraceAim(Hit, Start, End))
-        {
-            const bool bEnemy = Cast<ABaseEnemy>(Hit.GetActor()) != nullptr;
-            DrawDebugSphere(GetWorld(), Hit.ImpactPoint, bEnemy ? 12.f : 6.f, 8,
-                bEnemy ? FColor::Green : FColor::White, false, -1.f, 0, 1.5f);
-        }
-    }
-#endif
+    // (The HUD crosshair and hit markers replaced the old debug aim sphere.)
 }
 
 bool UWeaponComponent::TraceAim(FHitResult& OutHit, FVector& OutStart, FVector& OutEnd) const
@@ -113,7 +101,28 @@ void UWeaponComponent::ProcessHit(const FHitResult& Hit, float HitDamage)
         }
     }
 
-    Enemy->TakePoolDamage(Damage, Hit.ImpactPoint);
+    if (bIsInfused && CurrentInfusion != ETransfigurationElement::None)
+    {
+        // Infused shot: elemental damage plus a light dose of the element's status.
+        Enemy->TakeSpellDamage(Damage, Hit.ImpactPoint, CurrentInfusion);
+        if (Enemy->IsAlive() && Enemy->Status)
+        {
+            switch (CurrentInfusion)
+            {
+            case ETransfigurationElement::Fire:      Enemy->Status->ApplyStatus(ESpellStatus::Burning, 1.f, 3.f, OwnerCharacter); break;
+            case ETransfigurationElement::Ice:       Enemy->Status->ApplyStatus(ESpellStatus::Chilled, 1.f, 4.f, OwnerCharacter); break;
+            case ETransfigurationElement::Lightning: Enemy->Status->ApplyStatus(ESpellStatus::Shocked, 1.f, 0.3f, OwnerCharacter); break;
+            case ETransfigurationElement::Arcane:    Enemy->Status->ApplyStatus(ESpellStatus::Marked, 1.f, 2.f, OwnerCharacter); break;
+            case ETransfigurationElement::Earth:     if (bHeadshot) Enemy->Status->ApplyStatus(ESpellStatus::Staggered, 1.f, 0.5f, OwnerCharacter); break;
+            case ETransfigurationElement::Void:      Enemy->Status->ApplyStatus(ESpellStatus::Voided, 1.f, 1.f, OwnerCharacter); break;
+            default: break;
+            }
+        }
+    }
+    else
+    {
+        Enemy->TakePoolDamage(Damage, Hit.ImpactPoint);
+    }
     const bool bKill = !Enemy->IsAlive();
 
     float ManaToAdd = bKill ? ManaPerKill : ManaPerHit;

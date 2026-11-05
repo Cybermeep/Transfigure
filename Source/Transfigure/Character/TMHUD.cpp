@@ -77,7 +77,6 @@ void ATMHUD::DrawHUD()
     if (Char->IsSpellWheelOpen())
     {
         DrawSpellWheel(Char, Center);
-        DrawToasts();
         return;
     }
 
@@ -265,8 +264,13 @@ void ATMHUD::DrawPlayerStatus(const ATMCharacter* Char)
         if (Buffs->HasBuff(EBuffType::Defense)) BuffTags += TEXT("ARMOUR   ");
         if (Buffs->HasBuff(EBuffType::Jump))    BuffTags += TEXT("LEAP   ");
     }
-    if (Char->WeaponComponent && Char->WeaponComponent->IsWeaponInfused()) BuffTags += TEXT("INFUSED");
     if (!BuffTags.IsEmpty()) DrawLeftText(BuffTags, X, Y - 28.f, FLinearColor(0.7f, 1.f, 0.7f), 0.85f);
+    if (Char->WeaponComponent && Char->WeaponComponent->IsWeaponInfused())
+    {
+        const ETransfigurationElement E = Char->WeaponComponent->GetCurrentInfusion();
+        DrawLeftText(FString::Printf(TEXT("GUN: %s"), *USpellLibrary::GetElementName(E).ToUpper()), X + W - 110.f, Y - 28.f,
+            USpellLibrary::GetElementColor(E), 0.85f);
+    }
 }
 
 void ATMHUD::DrawSpellPanel(const ATMCharacter* Char)
@@ -368,7 +372,7 @@ void ATMHUD::DrawSpellWheel(const ATMCharacter* Char, const FVector2D& Center)
     const TArray<FName>& Spells = Char->GetSpellWheelOptions();
     const int32 Highlighted = Char->GetSpellWheelHighlighted();
     const UTransfigurationCastingComponent* Casting = Char->TransfigurationCasting;
-    const float Radius = FMath::Min(Canvas->ClipX, Canvas->ClipY) * 0.24f;
+    const float Radius = FMath::Min(Canvas->ClipX, Canvas->ClipY) * 0.36f;
 
     DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.4f), 0.f, 0.f, Canvas->ClipX, Canvas->ClipY);
     if (Spells.Num() == 0 || !Casting)
@@ -385,7 +389,7 @@ void ATMHUD::DrawSpellWheel(const ATMCharacter* Char, const FVector2D& Center)
         const float Angle = -PI * 0.5f + Step * i;   // first slot at the top, clockwise
         const FVector2D Pos = Center + FVector2D(FMath::Cos(Angle), FMath::Sin(Angle)) * Radius;
         const bool bHi = (i == Highlighted);
-        const float BW = bHi ? 200.f : 170.f, BH = bHi ? 64.f : 54.f;
+        const float BW = bHi ? 190.f : 165.f, BH = bHi ? 60.f : 50.f;
 
         const float Cost = Casting->GetSpellManaCost(Spells[i]);
         const bool bAfford = Char->HasEnoughMana(Cost);
@@ -409,7 +413,7 @@ void ATMHUD::DrawSpellWheel(const ATMCharacter* Char, const FVector2D& Center)
         if (const UTransfigurationDefinition* Def = Casting->GetSpellDefinition(Spells[Highlighted]))
         {
             float Y = Center.Y - 30.f;
-            for (const FString& L : WrapText(Def->Description.ToString(), Radius * 1.1f, 0.85f))
+            for (const FString& L : WrapText(Def->Description.ToString(), Radius * 0.9f, 0.85f))
             {
                 DrawCenteredText(L, FVector2D(Center.X, Y), Dim, 0.85f);
                 Y += 20.f;
@@ -509,7 +513,8 @@ void ATMHUD::DrawSpellbook(ATMCharacter* Char)
             DrawRect(FLinearColor(EC.R * 0.18f, EC.G * 0.18f, EC.B * 0.18f, bHover || bSel ? 0.95f : 0.7f), Rect.Min.X, Rect.Min.Y, Rect.GetSize().X, Rect.GetSize().Y);
             if (bSel) DrawFrame(Rect.Min.X, Rect.Min.Y, Rect.GetSize().X, Rect.GetSize().Y, FLinearColor(1.f, 0.9f, 0.3f), 3.f);
             else if (bHover) DrawFrame(Rect.Min.X, Rect.Min.Y, Rect.GetSize().X, Rect.GetSize().Y, EC, 2.f);
-            DrawLeftText(DisplayNameOf(Def, Id), Rect.Min.X + 8.f, Rect.Min.Y + 9.f, bOnWheel ? EC : EC * 0.75f, 0.85f);
+            const FLinearColor TextC = FMath::Lerp(EC, FLinearColor::White, bOnWheel ? 0.45f : 0.25f);
+            DrawLeftText(DisplayNameOf(Def, Id), Rect.Min.X + 8.f, Rect.Min.Y + 9.f, TextC, 0.85f);
             if (bOnWheel) DrawRect(EC, Rect.Max.X - 10.f, Rect.Min.Y + 14.f, 6.f, 6.f);   // dot = on the wheel
             BookHits.Add({ Rect, false, Id, INDEX_NONE });
             Y += TileH;

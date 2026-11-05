@@ -154,6 +154,11 @@ public:
     /** Archetype weaknesses on top of the machine-part rules: Bloats burst under fire, Gaunts shrug off cold. */
     virtual float GetElementScale(ETransfigurationElement Element, bool bMachinePart) const override;
 
+    /** Spell area damage is multiplied by this per limb (the body still takes it all), so one
+     *  blast doesn't strip every limb. Frozen limbs (x3) and the Severing Void still shred. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Zombie|Damage")
+    float SpellAreaLimbScale = 0.4f;
+
     /** Tear off the limb closest to From (Severing Void). False if none is left. */
     bool SeverNearestLimb(const FVector& From);
 

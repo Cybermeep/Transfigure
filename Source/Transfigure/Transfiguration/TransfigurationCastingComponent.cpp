@@ -12,6 +12,7 @@
 #include "TimerManager.h"
 #include "DrawDebugHelpers.h"
 #include "Combat/CombatFeedbackSubsystem.h"
+#include "Combat/WeaponComponent.h"
 
 UTransfigurationCastingComponent::UTransfigurationCastingComponent()
 {
@@ -147,20 +148,6 @@ void UTransfigurationCastingComponent::TickComponent(
 
     CleanupDestroyedSigils();
 
-#if !UE_BUILD_SHIPPING
-    // Sigils have no visuals yet: draw each armed one as a ring the size of its trigger radius.
-    for (const TObjectPtr<ASigilActor>& SigilPtr : ActiveSigils)
-    {
-        const ASigilActor* Sigil = SigilPtr.Get();
-        if (!Sigil || !Sigil->IsArmed() || !Sigil->GetSpellDefinition()) continue;
-        const UTransfigurationDefinition* Def = Sigil->GetSpellDefinition();
-        const FColor Color = Def->bIsHealingSigil ? FColor::Green : Def->bIsBuffSigil ? FColor::Cyan : FColor::Red;
-        const FVector N = Sigil->GetActorForwardVector();  // sigils face along the surface normal
-        DrawDebugCircle(GetWorld(), Sigil->GetActorLocation(), Def->TriggerRadius, 32, Color, false, -1.f, 0, 2.f,
-            FVector::CrossProduct(N, FVector::RightVector).GetSafeNormal(),
-            FVector::CrossProduct(N, FVector::ForwardVector).GetSafeNormal(), false);
-    }
-#endif
 }
 
 bool UTransfigurationCastingComponent::PerformAimTrace(FHitResult& OutHit) const
@@ -318,6 +305,12 @@ void UTransfigurationCastingComponent::ConfirmPlacement()
         ActiveSigils.Add(Sigil);
         OnPlacementConfirmed(Sigil);
         if (SpellDef->CooldownDuration > 0.f) CooldownReadyAt.Add(ActiveSpellID, NowSeconds() + SpellDef->CooldownDuration);
+        // Your gun carries the spell's element for a few seconds: infused shots apply its status.
+        if (TMChar && TMChar->WeaponComponent && SpellDef->Element != ETransfigurationElement::None
+            && !SpellDef->bIsHealingSigil && !SpellDef->bIsBuffSigil)
+        {
+            TMChar->WeaponComponent->InfuseWeaponWithElement(SpellDef->Element);
+        }
         // Instant spells (dashes, self buffs) go off as soon as they're placed.
         if (SpellDef->TriggerType == ESigilTriggerType::OnPlace) Sigil->TriggerManual();
         UE_LOG(LogTemp, Warning, TEXT("[TM] Sigil placed: %s (%s) on %s, %d active"),
@@ -344,6 +337,24 @@ bool UTransfigurationCastingComponent::CastAtAim(FName SpellID)
 
     ConfirmPlacement();
     if (CurrentState == ECastingState::Drawing)   // placement refused (e.g. damaged surface)
+    {
+        CancelDrawMode();
+        return false;
+    }
+    return true;
+}
+
+bool UTransfigurationCastingComponent::CastAtLocation(FName SpellID, FVector Location, FVector SurfaceNormal)
+{
+    if (CurrentState == ECastingState::Drawing) CancelDrawMode();
+    BeginDrawMode(SpellID);
+    if (CurrentState != ECastingState::Drawing) return false;
+    CurrentAimHit = FHitResult();
+    CurrentAimHit.bBlockingHit = true;
+    CurrentAimHit.Location = CurrentAimHit.ImpactPoint = Location;
+    CurrentAimHit.Normal = CurrentAimHit.ImpactNormal = SurfaceNormal.GetSafeNormal();
+    ConfirmPlacement();
+    if (CurrentState == ECastingState::Drawing)
     {
         CancelDrawMode();
         return false;

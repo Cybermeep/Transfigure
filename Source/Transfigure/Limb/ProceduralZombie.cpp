@@ -894,7 +894,8 @@ void AProceduralZombie::TakeAreaDamage(float Damage, FVector Origin, float Inner
     {
         FLimbPartRuntime& State = PartState[Hit.Key];
         if (!State.bAttached) continue;   // already taken with a severed parent
-        State.Health -= Damage * Hit.Value * PartDamageScale(State);
+        const float SpellScale = PendingElement != ETransfigurationElement::None ? SpellAreaLimbScale : 1.f;
+        State.Health -= Damage * Hit.Value * PartDamageScale(State) * SpellScale;
         if (State.Health <= 0.f && State.Spec.bSeverable)
         {
             bLostHead |= State.Spec.Part == ELimbPart::Head;

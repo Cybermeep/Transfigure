@@ -47,7 +47,7 @@ ASpellZone* ASpellZone::Start(UWorld* World, EMode InMode, UTransfigurationDefin
         if (Z->Visual)
         {
             Z->Visual->SetPersistent(true);
-            Z->Visual->SetIntensity(InMode == EMode::Pull ? 4.f : 2.5f);
+            Z->Visual->SetIntensity(InMode == EMode::Pull ? 2.5f : 1.4f);
         }
         break;
     case EMode::Delayed:
@@ -172,6 +172,14 @@ void ASpellZone::Tick(float DeltaSeconds)
     case EMode::DashBurst:
         if (Age >= Duration)
         {
+            // Arrived: keep the dash's sideways speed, but no flying on upward.
+            if (ACharacter* Char = Cast<ACharacter>(Instigator.Get()))
+            {
+                UCharacterMovementComponent* CMC = Char->GetCharacterMovement();
+                const FVector Up = URingFrameUtils::GetUpFor(Char);
+                const float Vert = FVector::DotProduct(CMC->Velocity, Up);
+                CMC->Velocity = URingFrameUtils::StripVertical(CMC->Velocity, Up) * 0.8f + Up * FMath::Clamp(Vert, -400.f, 300.f);
+            }
             Hit(C);
             ASpellFX::SpawnBurst(World, C, Params.OuterRadius, Params.Color, 0.35f);
         }

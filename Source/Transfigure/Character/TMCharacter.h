@@ -110,6 +110,10 @@ public:
     /** Spellbook screen (key B): browse known spells, set the wheel. */
     bool IsSpellbookOpen() const { return bSpellbookOpen; }
     void ToggleSpellbook();
+
+    /** Headless check: start the game with -TMSpellTest and the player casts every spell at
+     *  spawned zombies (plus spellbook, wheel and infused shots), logs it, then quits. */
+    void StartSpellSmokeTest();
     /** Seconds since you were last wall running (0 while you are). */
     float GetTimeSinceWallRun() const { return TimeSinceWallRun; }
     /** Narrow the view by this much this frame (e.g. slingshot tension). Set every frame it applies. */
@@ -698,6 +702,9 @@ private:
     bool bSpellbookOpen = false;
     bool bOnSlipperyFloor = false;
     float SavedGroundFriction = 8.f;
+    void SpellSmokeTestStep();
+    FTimerHandle SmokeTestTimer;
+    int32 SmokeStep = 0;
     float LastWallRunSide = 0.f;
     float TimeSinceWallRun = 100.f;
     float DefaultBrakingDecelerationWalking = 2048.f;

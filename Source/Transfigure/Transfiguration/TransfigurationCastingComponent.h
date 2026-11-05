@@ -73,6 +73,13 @@ public:
     UFUNCTION(BlueprintPure, Category = "Casting")
         UTransfigurationDefinition* GetSpellDefinition(FName SpellID) const;
 
+    /** Place a spell's sigil at an exact spot (no aim trace). Same rules as CastAtAim (mana, cooldown). */
+    UFUNCTION(BlueprintCallable, Category = "Casting")
+        bool CastAtLocation(FName SpellID, FVector Location, FVector SurfaceNormal);
+
+    /** Testing: forget all cooldowns. */
+    void ClearCooldowns() { CooldownReadyAt.Reset(); }
+
     UFUNCTION(BlueprintCallable, Category = "Casting")
         void TriggerNearestManualSigil();
 

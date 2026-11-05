@@ -31,6 +31,10 @@
 #include "Destruction/DestructionManager.h"
 #include "Kismet/GameplayStatics.h"
 #include "TimerManager.h"
+#include "Limb/ProceduralZombie.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
+#include "UnrealClient.h"
 #include "RingWorldGeometry.h"
 #include "RingWorldSettings.h"
 #include "RingFrameUtils.h"
@@ -90,6 +94,10 @@ void ATMCharacter::BeginPlay()
     }
     SetupFirstPersonCamera();
     DefaultBrakingDecelerationWalking = GetCharacterMovement()->BrakingDecelerationWalking;
+    if (FParse::Param(FCommandLine::Get(), TEXT("TMSpellTest")))
+    {
+        StartSpellSmokeTest();
+    }
     // The selected spell has to be on the wheel (the casting component set the wheel up in Super::BeginPlay).
     if (TransfigurationCasting)
     {
@@ -717,6 +725,88 @@ void ATMCharacter::ToggleSpellbook()
         }
     }
     UE_LOG(LogTemp, Warning, TEXT("[TM] Spellbook %s"), bSpellbookOpen ? TEXT("opened") : TEXT("closed"));
+}
+
+void ATMCharacter::StartSpellSmokeTest()
+{
+    UE_LOG(LogTemp, Warning, TEXT("[TM] SMOKE: spell test starting"));
+    bInfiniteManaForTesting = true;
+    SmokeStep = 0;
+    CameraPitch = -22.f;   // look down at where the sigils go
+    GetWorldTimerManager().SetTimer(SmokeTestTimer, this, &ATMCharacter::SpellSmokeTestStep, 1.6f, true, 2.f);
+}
+
+void ATMCharacter::SpellSmokeTestStep()
+{
+    UWorld* World = GetWorld();
+    if (!World || !TransfigurationCasting) return;
+    const TArray<FName> Spells = TransfigurationCasting->GetKnownSpellIDs();
+    const FVector Up = GetRingUp();
+    const FVector Fwd = GetActorForwardVector();
+    CurrentMana = MaxMana;
+    Health = MaxHealth;
+    TransfigurationCasting->ClearCooldowns();
+
+    // Find the ground a few metres ahead.
+    auto Ground = [&](const FVector& At) -> FVector
+    {
+        FHitResult Hit;
+        FCollisionQueryParams Params(SCENE_QUERY_STAT(SmokeGround), false, this);
+        if (World->LineTraceSingleByChannel(Hit, At + Up * 500.f, At - Up * 2000.f, ECC_WorldStatic, Params)) return Hit.ImpactPoint;
+        return At - Up * 90.f;
+    };
+
+    if (SmokeStep < Spells.Num())
+    {
+        const FName Id = Spells[SmokeStep];
+        // A few zombies to hit (every other spell, so corpses don't pile up).
+        for (int32 i = 0; i < ((SmokeStep % 2) ? 0 : 3); ++i)
+        {
+            const FVector P = Ground(GetActorLocation() + Fwd * (900.f + i * 150.f) + GetActorRightVector() * (i - 1) * 250.f) + Up * 110.f;
+            FActorSpawnParameters SP;
+            SP.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+            if (AProceduralZombie* Z = World->SpawnActor<AProceduralZombie>(AProceduralZombie::StaticClass(), P, GetActorRotation() + FRotator(0.f, 180.f, 0.f), SP))
+            {
+                Z->SetLifeSpan(12.f);
+            }
+        }
+        const FVector Spot = Ground(GetActorLocation() + Fwd * 600.f);
+        const bool bPlaced = TransfigurationCasting->CastAtLocation(Id, Spot, Up);
+        UE_LOG(LogTemp, Warning, TEXT("[TM] SMOKE %d/%d: %s placed=%d"), SmokeStep + 1, Spells.Num(), *Id.ToString(), bPlaced ? 1 : 0);
+        // Fire manual sigils a moment later (proximity / timed ones go off by themselves).
+        FTimerHandle Fire;
+        GetWorldTimerManager().SetTimer(Fire, FTimerDelegate::CreateWeakLambda(this, [this]()
+        {
+            if (TransfigurationCasting) TransfigurationCasting->TriggerAllSigils();
+        }), 0.4f, false);
+        // Infused shots at the zombies (the spell just infused the gun).
+        FTimerHandle Shoot;
+        GetWorldTimerManager().SetTimer(Shoot, FTimerDelegate::CreateWeakLambda(this, [this]()
+        {
+            if (WeaponComponent) for (int32 i = 0; i < 3; ++i) WeaponComponent->FireWeapon();
+        }), 0.9f, false);
+        // Screenshots (with HUD) while the spell plays out: Saved/Screenshots.
+        FTimerHandle Shot;
+        const FString ShotName = FString::Printf(TEXT("Smoke_%02d_%s"), SmokeStep + 1, *Id.ToString());
+        GetWorldTimerManager().SetTimer(Shot, FTimerDelegate::CreateWeakLambda(this, [ShotName]()
+        {
+            FScreenshotRequest::RequestScreenshot(ShotName, true, false);
+        }), 0.55f, false);
+        // Mix in the UI now and then (drawn only when rendering).
+        if (SmokeStep == 3) OpenSpellWheel();
+        if (SmokeStep == 4) CloseSpellWheel();
+        if (SmokeStep == 6 || SmokeStep == 7) ToggleSpellbook();
+        ++SmokeStep;
+        return;
+    }
+
+    GetWorldTimerManager().ClearTimer(SmokeTestTimer);
+    UE_LOG(LogTemp, Warning, TEXT("[TM] SMOKE: spell test done (%d spells) - quitting"), Spells.Num());
+    FTimerHandle Quit;
+    GetWorldTimerManager().SetTimer(Quit, FTimerDelegate::CreateWeakLambda(this, [this]()
+    {
+        if (APlayerController* PC = Cast<APlayerController>(GetController())) PC->ConsoleCommand(TEXT("quit"));
+    }), 4.f, false);
 }
 
 void ATMCharacter::OnTriggerSigilPressed()

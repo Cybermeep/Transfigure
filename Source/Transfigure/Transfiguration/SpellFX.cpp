@@ -6,6 +6,7 @@
 #include "Engine/World.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
+#include "ProceduralMeshComponent.h"
 
 ASpellFX::ASpellFX()
 {
@@ -16,6 +17,10 @@ ASpellFX::ASpellFX()
     Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     Mesh->SetCastShadow(false);
     Mesh->SetCanEverAffectNavigation(false);
+    Ring = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("Ring"));
+    Ring->SetupAttachment(Mesh);
+    Ring->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    Ring->SetCastShadow(false);
 }
 
 UMaterialInterface* ASpellFX::GetGlowMaterial()
@@ -41,19 +46,46 @@ UStaticMesh* ASpellFX::GetShape(const TCHAR* Name)
     return Slot.Get();
 }
 
+static float KindIntensity(int32 Kind)
+{
+    // Burst, Beam, Column, Disc, Falling
+    static const float I[] = { 1.6f, 8.f, 2.f, 1.6f, 3.f };
+    return I[FMath::Clamp(Kind, 0, 4)];
+}
+
 void ASpellFX::Setup(EKind InKind, UStaticMesh* Shape, const FLinearColor& Color, float InLife)
 {
     Kind = InKind;
     Life = FMath::Max(InLife, 0.05f);
     FXColor = Color;
-    if (Shape) Mesh->SetStaticMesh(Shape);
+    if (Shape && InKind != EKind::Disc) Mesh->SetStaticMesh(Shape);
+    if (InKind == EKind::Disc)
+    {
+        // Unit ring (radius 50 = the engine cylinder's) in the actor's XY plane, so scaling matches.
+        TArray<FVector> V;
+        TArray<int32> T;
+        const int32 N = 72;
+        for (int32 i = 0; i <= N; ++i)
+        {
+            const float A = 2.f * PI * i / N;
+            V.Add(FVector(FMath::Cos(A) * 46.5f, FMath::Sin(A) * 46.5f, 0.f));
+            V.Add(FVector(FMath::Cos(A) * 50.f, FMath::Sin(A) * 50.f, 0.f));
+        }
+        for (int32 i = 0; i < N; ++i)
+        {
+            const int32 a = i * 2, b = a + 1, c = a + 3, d = a + 2;
+            T.Append({ a, b, c, a, c, d, a, c, b, a, d, c });
+        }
+        Ring->CreateMeshSection(0, V, T, TArray<FVector>(), TArray<FVector2D>(), TArray<FColor>(), TArray<FProcMeshTangent>(), false);
+    }
     if (UMaterialInterface* Glow = GetGlowMaterial())
     {
         MID = UMaterialInstanceDynamic::Create(Glow, this);
         MID->SetVectorParameterValue(TEXT("Color"), Color);
-        MID->SetScalarParameterValue(TEXT("Intensity"), 6.f);
+        MID->SetScalarParameterValue(TEXT("Intensity"), KindIntensity(static_cast<int32>(InKind)));
         MID->SetScalarParameterValue(TEXT("Opacity"), 1.f);
         Mesh->SetMaterial(0, MID);
+        Ring->SetMaterial(0, MID);
     }
 }
 

@@ -2,6 +2,7 @@
 
 #include "Limb/SeveredBodyPart.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Engine/SkinnedAssetCommon.h"
 #include "Engine/SkeletalMesh.h"
 #include "PhysicsEngine/BodyInstance.h"
 #include "PhysicsEngine/PhysicsAsset.h"
@@ -28,6 +29,7 @@ void ASeveredBodyPart::Init(USkeletalMesh* InMesh, const TArray<UMaterialInterfa
     const USkeletalMeshComponent* PoseSource)
 {
     RootBone = CutBone;
+    Mesh->SkinCacheUsage.Init(ESkinCacheUsage::Disabled, 1);
     Mesh->SetSkeletalMesh(InMesh);
     for (int32 i = 0; i < SlotMaterials.Num(); ++i)
     {
