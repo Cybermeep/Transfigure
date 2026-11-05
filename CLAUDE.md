@@ -51,6 +51,8 @@ Gotchas: the imported mesh is in **centimetres** under a 0.01-scale parent empty
 ## Layout (`Source/Transfigure/`)
 
 - `Ringworld/` — spin axis world +Y, ring in XZ. `URingWorldGeometry`, `URingFrameUtils`, `FRingWorldSpec` in `URingWorldSettings` (`Config/DefaultGame.ini`). `bFlatWorldForTesting=True` makes gravity -Z for flat test maps.
+  - Ring maps: an `ARingBandGenerator` (`RingBand`, at the world origin) in a map switches that map to curved ring gravity while it plays (overrides the flag, restored on EndPlay), draws the whole ring, and spawns `ARingNearField`: a 2 km collision tile under the player, re-spawned (not moved) when they near its edge. Tiles exist only during play.
+  - `/Game/Maps/L_RingArena` = L_TestArena placed 20° round the ring (so down is tilted in world space). Rebuild it with `Tools/make_ring_arena.py` (editor closed) after changing L_TestArena; then Build Paths in the editor if enemies need the navmesh.
 - `Character/` `ATMCharacter` + `StateMachine/`, `States/TMState_*`. Actor yaw and camera pitch are driven in `UpdateRingGravity`, NOT by ControlRotation.
 - `Enemy/`, `Grapple/`, `Transfiguration/` (spells/sigils), `Temporal/`, `Combat/`.
 - `Limb/` — procedural limb system. `FLimbMeshGenerator` (math-generated parts), `AProceduralZombie` (parts on a hidden UE5 Mannequin skeleton, capsule hit zones, severing through `TakePoolDamage`, ragdoll corpses), `ASeveredLimb` (physics limb on ring gravity). Needs the Mannequin in `/Game/Characters/Mannequins`.

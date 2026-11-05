@@ -3,6 +3,7 @@
 #include "Temporal/TemporalClapAnimInstance.h"
 #include "Character/TMCharacter.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "RingFrameUtils.h"
 
 void UTemporalClapAnimInstance::NativeInitializeAnimation()
 {
@@ -52,7 +53,7 @@ void UTemporalClapAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
     if (bIsWallRunning && CMC)
     {
         FVector RightVec = OwnerCharacter->GetActorRightVector();
-        FVector Vel = CMC->Velocity.GetSafeNormal2D();
+        FVector Vel = URingFrameUtils::StripVertical(CMC->Velocity, URingFrameUtils::GetUpFor(OwnerCharacter)).GetSafeNormal();
         WallRunLean = FVector::DotProduct(RightVec, Vel);
     }
     else

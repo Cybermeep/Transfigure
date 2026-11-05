@@ -8,6 +8,7 @@
 #include "Transfiguration/SigilActor.h"
 #include "Enemy/BaseEnemy.h"
 #include "Engine/OverlapResult.h"
+#include "RingFrameUtils.h"
 
 
 
@@ -55,10 +56,11 @@ void UIceWallEffect::CreateIceWall(const FVector& Origin, AActor* Instigator, UT
     SpawnParams.Owner = Instigator;
     SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
-    FVector ToInstigator = (Instigator->GetActorLocation() - Origin);
-    ToInstigator.Z = 0.f;
-    ToInstigator.Normalize();
-    FRotator WallRotation = ToInstigator.Rotation();
+    // Face the caster across the local ground plane, standing upright on the ring.
+    const FVector Up = URingFrameUtils::GetUpAt(Origin);
+    FVector ToInstigator = URingFrameUtils::StripVertical(Instigator->GetActorLocation() - Origin, Up).GetSafeNormal();
+    if (ToInstigator.IsNearlyZero()) ToInstigator = FVector::CrossProduct(Up, FVector::RightVector).GetSafeNormal();
+    const FRotator WallRotation = FRotationMatrix::MakeFromXZ(ToInstigator, Up).Rotator();
 
     AActor* Wall = GetWorld()->SpawnActor<AActor>(
         IceWallClass, Origin, WallRotation, SpawnParams);

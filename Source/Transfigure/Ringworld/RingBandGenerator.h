@@ -37,8 +37,24 @@ public:
      * circumference, 512 segments means ~20 km per facet -- plenty, since
      * you'll never be close enough to this proxy mesh to see the joints.
      */
-    UPROPERTY(EditAnywhere, Category = "Ring World", meta = (ClampMin = "16", ClampMax = "4096"))
-    int32 RadialSegments = 512;
+    UPROPERTY(EditAnywhere, Category = "Ring World", meta = (ClampMin = "16", ClampMax = "8192"))
+    int32 RadialSegments = 4096;
+
+    /**
+     * The band is drawn this far below the true surface (cm), so the collidable
+     * near-field floor and level floors always cover it. With 4096 segments the
+     * facets sag up to ~50 cm between vertices, so keep this above that.
+     */
+    UPROPERTY(EditAnywhere, Category = "Ring World", meta = (ClampMin = "0.0"))
+    double BandSink = 300.0;
+
+    /**
+     * Placing this actor in a map makes that map a ring world while it plays: curved
+     * ring gravity (the Project Settings flag bFlatWorldForTesting is overridden off),
+     * and a collidable floor follows the player. Maps without it stay flat.
+     */
+    UPROPERTY(EditAnywhere, Category = "Ring World")
+    bool bActivateRingWorld = true;
 
     /** Rebuild automatically whenever a property above changes in the Details panel. */
     UPROPERTY(EditAnywhere, Category = "Ring World")
@@ -47,6 +63,9 @@ public:
 protected:
 
     virtual void OnConstruction(const FTransform& Transform) override;
+    virtual void PostInitializeComponents() override;
+    virtual void BeginPlay() override;
+    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 #if WITH_EDITOR
     virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
@@ -56,4 +75,7 @@ private:
 
     UPROPERTY(VisibleAnywhere, Category = "Ring World")
     TObjectPtr<UDynamicMeshComponent> DynamicMeshComponent;
+
+    bool bChangedFlatFlag = false;
+    bool bSavedFlatFlag = true;
 };

@@ -3,6 +3,8 @@
 #include "RingBandGenerator.h"
 #include "RingWorldGeometry.h"
 #include "RingWorldSettings.h"
+#include "RingNearField.h"
+#include "Engine/World.h"
 
 #include "Components/DynamicMeshComponent.h"
 #include "UDynamicMesh.h"
@@ -23,6 +25,43 @@ void ARingBandGenerator::OnConstruction(const FTransform& Transform)
 {
     Super::OnConstruction(Transform);
     GenerateRingBand();
+}
+
+void ARingBandGenerator::PostInitializeComponents()
+{
+    Super::PostInitializeComponents();
+
+    // Runs before any actor's BeginPlay, so everything that reads the spec this
+    // session sees ring gravity. Game worlds only (not the editor's own world).
+    UWorld* World = GetWorld();
+    if (bActivateRingWorld && World && World->IsGameWorld())
+    {
+        URingWorldSettings* Settings = GetMutableDefault<URingWorldSettings>();
+        bSavedFlatFlag = Settings->Spec.bFlatWorldForTesting;
+        Settings->Spec.bFlatWorldForTesting = false;
+        bChangedFlatFlag = true;
+        UE_LOG(LogTemp, Warning, TEXT("[TM] Ring world ON for this map: curved gravity, radius %.0f km"), Settings->Spec.Radius / 1e5);
+    }
+}
+
+void ARingBandGenerator::BeginPlay()
+{
+    Super::BeginPlay();
+    if (bChangedFlatFlag)
+    {
+        GetWorld()->SpawnActor<ARingNearField>(ARingNearField::StaticClass(), FTransform::Identity);
+    }
+}
+
+void ARingBandGenerator::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+    if (bChangedFlatFlag)
+    {
+        // Put the project setting back so flat test maps stay flat in the same editor session.
+        GetMutableDefault<URingWorldSettings>()->Spec.bFlatWorldForTesting = bSavedFlatFlag;
+        bChangedFlatFlag = false;
+    }
+    Super::EndPlay(EndPlayReason);
 }
 
 #if WITH_EDITOR
@@ -52,15 +91,16 @@ void ARingBandGenerator::GenerateRingBand()
     }
 
     const FRingWorldSpec& Spec = URingWorldSettings::GetSpec();
-    const int32 N = FMath::Clamp(RadialSegments, 16, 4096);
+    const int32 N = FMath::Clamp(RadialSegments, 16, 8192);
 
     // Cross-section profile, in (radius-from-axis, lateral) pairs, ordered
     // left-wall-top -> left-edge -> right-edge -> right-wall-top. This is an
     // open polyline; revolving it 360 degrees produces the band plus rim
     // walls without end caps, which is what we want for a closed loop.
-    const double R = Spec.Radius;
+    // Drawn slightly below the true surface so near-field and level floors cover it.
+    const double R = Spec.Radius + BandSink;
     const double HalfWidth = Spec.Width * 0.5;
-    const double WallTopR = R - Spec.RimWallHeight;
+    const double WallTopR = Spec.Radius - Spec.RimWallHeight;
 
     const double ProfileR[4] = { WallTopR, R, R, WallTopR };
     const double ProfileY[4] = { -HalfWidth, -HalfWidth, HalfWidth, HalfWidth };

@@ -10,6 +10,7 @@
 #include "Enemy/BaseEnemy.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Kismet/GameplayStatics.h"
+#include "RingFrameUtils.h"
 
 
 
@@ -294,9 +295,10 @@ void AGrappleLine::ApplyEarthEffect(FVector Location)
         // Heavy damage + knockback away from line point
         Enemy->TakePoolDamage(20.f, Location);
 
-        FVector KnockbackDir = (Enemy->GetActorLocation() - Location).GetSafeNormal();
-        KnockbackDir.Z = 0.4f; // slight upward angle
-        KnockbackDir.Normalize();
+        // Away from the line, angled slightly up (ring up, not world Z).
+        const FVector EnemyUp = URingFrameUtils::GetUpFor(Enemy);
+        FVector KnockbackDir = URingFrameUtils::StripVertical(Enemy->GetActorLocation() - Location, EnemyUp).GetSafeNormal();
+        KnockbackDir = (KnockbackDir + EnemyUp * 0.4f).GetSafeNormal();
 
         UCharacterMovementComponent* CMC =
             Enemy->FindComponentByClass<UCharacterMovementComponent>();
