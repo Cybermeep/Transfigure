@@ -121,6 +121,18 @@ public:
     /** Headless check: start the game with -TMSpellTest and the player casts every spell at
      *  spawned zombies (plus spellbook, wheel and infused shots), logs it, then quits. */
     void StartSpellSmokeTest();
+
+    /** Health reached 0: input off, slow motion, death screen. Click / Space / R restarts the map. */
+    bool IsDead() const { return bIsDead; }
+    /** Real time the player died (the death screen fades in from it). */
+    double GetDeathTime() const { return DeathTime; }
+    /** Ignore all damage (headless tests). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TM|Testing")
+    bool bGodModeForTesting = false;
+
+    /** Headless check: start L_CombatArena with -TMArenaTest. Fights the first waves with
+     *  auto-aim, stops defending and dies, restarts once, then quits. */
+    void StartArenaTest();
     /** Seconds since you were last wall running (0 while you are). */
     float GetTimeSinceWallRun() const { return TimeSinceWallRun; }
     /** Narrow the view by this much this frame (e.g. slingshot tension). Set every frame it applies. */
@@ -710,6 +722,13 @@ private:
     FRotator CameraShakeRot = FRotator::ZeroRotator;
     double LastHurtTime = -100.0;
     bool bSpellbookOpen = false;
+    bool bIsDead = false;
+    double DeathTime = 0.0;
+    void HandleDeath();
+    void RestartRun();
+    void ArenaTestTick();
+    FTimerHandle ArenaTestTimer;
+    double ArenaTestStart = 0.0;
     bool bOnSlipperyFloor = false;
     float SavedGroundFriction = 8.f;
     void SpellSmokeTestStep();

@@ -2,7 +2,17 @@
 
 Goal: one arena fight of about 5–10 minutes where you **need** movement, magic and the gun together to survive. Waves get harder, you can die, and the run ends with a score. Each item has an ID (pick by ID), a size (**S** about an hour, **M** a few hours, **L** a long block) and what it needs first. It gets built in a new map, so `L_TestArena` (which has your uncommitted changes) stays untouched.
 
-## What's there now
+## Status (2026-11-05)
+
+**Step 1 done:** A1 (death and restart; the pause menu part is still A2), A3, B1, C1 and C2.
+- Play `/Game/Maps/L_CombatArena`, built by `Tools/make_combat_arena.py`.
+- Waves are endless.
+- Death restarts the whole run. Click, Space or R restarts; the best score is kept for the session.
+- The nav mesh builds at runtime (`RuntimeGeneration=Dynamic`).
+- An enemy stuck for 6 s, away from you, is moved back to a spawn point, and the log says where it was stuck.
+- Headless check: `-TMArenaTest` (see CLAUDE.md).
+
+## What was there before this plan
 
 - **Movement:** sprint, slide, double jump, wall run, wall jump, ceiling run, grapple (boost, anchor swings, corner snaps), launch pads on the ring.
 - **Magic:** 27 spells, 11 combos plus Overcharge and Amplify, status effects, the spell wheel (Q), the spellbook (B) and the temporal clap (F).

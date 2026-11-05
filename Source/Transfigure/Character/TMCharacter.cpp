@@ -39,6 +39,7 @@
 #include "RingWorldSettings.h"
 #include "RingFrameUtils.h"
 #include "EngineUtils.h"
+#include "Combat/CombatWaveDirector.h"
 
 ATMCharacter::ATMCharacter()
 {
@@ -99,6 +100,10 @@ void ATMCharacter::BeginPlay()
     {
         StartSpellSmokeTest();
     }
+    else if (FParse::Param(FCommandLine::Get(), TEXT("TMArenaTest")))
+    {
+        StartArenaTest();
+    }
     // The selected spell has to be on the wheel (the casting component set the wheel up in Super::BeginPlay).
     if (TransfigurationCasting)
     {
@@ -151,6 +156,17 @@ void ATMCharacter::NotifyControllerChanged()
 void ATMCharacter::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
+    if (bIsDead)
+    {
+        // Death screen: after a moment, click / Space / R / Enter restarts.
+        APlayerController* PC = Cast<APlayerController>(GetController());
+        if (PC && GetWorld()->GetRealTimeSeconds() - DeathTime > 1.2
+            && (PC->WasInputKeyJustPressed(EKeys::LeftMouseButton) || PC->WasInputKeyJustPressed(EKeys::SpaceBar)
+                || PC->WasInputKeyJustPressed(EKeys::R) || PC->WasInputKeyJustPressed(EKeys::Enter)))
+        {
+            RestartRun();
+        }
+    }
     UpdateMomentumBraking();
     UpdateCameraEffects(DeltaTime);
     UpdateRingGravity(DeltaTime);
@@ -614,6 +630,7 @@ float ATMCharacter::TakeDamage(float DamageAmount, FDamageEvent const& DamageEve
 {
     // Our own spells (FireBlast radial damage) shouldn't hurt us.
     if (DamageCauser == this || EventInstigator == GetController()) return 0.f;
+    if (bIsDead || bGodModeForTesting) return 0.f;
 
     const float Applied = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
     // Defence buff (Rock Armour).
@@ -624,7 +641,32 @@ float ATMCharacter::TakeDamage(float DamageAmount, FDamageEvent const& DamageEve
     AddCameraShake(0.35f);
     UE_LOG(LogTemp, Warning, TEXT("[TM] Player took %.0f damage from %s, health %.0f"),
         Applied, *GetNameSafe(DamageCauser), Health);
+    if (Health <= 0.f) HandleDeath();
     return Applied;
+}
+
+void ATMCharacter::HandleDeath()
+{
+    if (bIsDead) return;
+    bIsDead = true;
+    DeathTime = GetWorld()->GetRealTimeSeconds();
+    if (WeaponComponent) WeaponComponent->StopFiring();
+    if (bSpellWheelOpen) CloseSpellWheel();
+    if (bSpellbookOpen) ToggleSpellbook();
+    EndTemporalClap();
+    // No more control (the restart keys are read straight from the controller in Tick).
+    if (APlayerController* PC = Cast<APlayerController>(GetController())) DisableInput(PC);
+    // Slow motion while the death screen comes up; restarting loads a fresh world at normal speed.
+    UGameplayStatics::SetGlobalTimeDilation(GetWorld(), 0.3f);
+    AddCameraShake(0.6f);
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Player died"));
+}
+
+void ATMCharacter::RestartRun()
+{
+    const FString Map = UGameplayStatics::GetCurrentLevelName(this, true);
+    UE_LOG(LogTemp, Warning, TEXT("[TM] Restarting %s"), *Map);
+    UGameplayStatics::OpenLevel(this, FName(*Map));
 }
 
 // ── COMBAT INPUT HANDLERS ──
@@ -744,6 +786,7 @@ static FVector GSmokeStartForward = FVector::ForwardVector;
 void ATMCharacter::StartSpellSmokeTest()
 {
     UE_LOG(LogTemp, Warning, TEXT("[TM] SMOKE: spell test starting"));
+    bGodModeForTesting = true;
     GSmokeStartLocation = GetActorLocation();
     GSmokeStartForward = GetActorForwardVector();
     bInfiniteManaForTesting = true;
@@ -960,6 +1003,112 @@ void ATMCharacter::SpellSmokeTestStep()
     {
         if (APlayerController* PC = Cast<APlayerController>(GetController())) PC->ConsoleCommand(TEXT("quit"));
     }), 4.f, false);
+}
+
+// Arena test runs (statics survive the map reload, so the second load knows it's the restart).
+static int32 GArenaTestLoads = 0;
+
+void ATMCharacter::StartArenaTest()
+{
+    ++GArenaTestLoads;
+    UE_LOG(LogTemp, Warning, TEXT("[TM] ARENA test: load %d"), GArenaTestLoads);
+    if (GArenaTestLoads >= 2)
+    {
+        // Back after the restart: see the fresh countdown, then quit.
+        UE_LOG(LogTemp, Warning, TEXT("[TM] ARENA test: restart worked (fresh map, health %.0f)"), Health);
+        FTimerHandle Shot, Quit;
+        GetWorldTimerManager().SetTimer(Shot, FTimerDelegate::CreateWeakLambda(this, []()
+        {
+            FScreenshotRequest::RequestScreenshot(TEXT("Arena_03_Restarted"), true, false);
+        }), 2.f, false);
+        GetWorldTimerManager().SetTimer(Quit, FTimerDelegate::CreateWeakLambda(this, [this]()
+        {
+            UE_LOG(LogTemp, Warning, TEXT("[TM] ARENA test done - quitting"));
+            if (APlayerController* PC = Cast<APlayerController>(GetController())) PC->ConsoleCommand(TEXT("quit"));
+        }), 4.f, false);
+        return;
+    }
+    bGodModeForTesting = true;
+    ArenaTestStart = GetWorld()->GetTimeSeconds();
+    GetWorldTimerManager().SetTimer(ArenaTestTimer, this, &ATMCharacter::ArenaTestTick, 0.05f, true, 0.5f);
+}
+
+void ATMCharacter::ArenaTestTick()
+{
+    const float T = static_cast<float>(GetWorld()->GetTimeSeconds() - ArenaTestStart);
+    if (bIsDead)
+    {
+        // Show the death screen, then press restart.
+        static double ShotAt = 0.0;
+        const double Real = GetWorld()->GetRealTimeSeconds();
+        if (ShotAt <= 0.0)
+        {
+            ShotAt = Real;
+            UE_LOG(LogTemp, Warning, TEXT("[TM] ARENA test: died after %.0f s"), T);
+        }
+        if (Real - ShotAt > 1.6 && Real - ShotAt < 1.7) FScreenshotRequest::RequestScreenshot(TEXT("Arena_02_Death"), true, false);
+        if (Real - ShotAt > 2.5)
+        {
+            GetWorldTimerManager().ClearTimer(ArenaTestTimer);
+            RestartRun();
+        }
+        return;
+    }
+
+    if (T < 30.f)
+    {
+        // Fight: turn to the nearest living enemy and hold the trigger.
+        ABaseEnemy* Best = nullptr;
+        float BestDist = 6000.f;
+        for (TActorIterator<ABaseEnemy> It(GetWorld()); It; ++It)
+        {
+            if (!It->IsAlive()) continue;
+            const float D = FVector::Dist(It->GetActorLocation(), GetActorLocation());
+            if (D < BestDist) { BestDist = D; Best = *It; }
+        }
+        const FVector Up = GetRingUp();
+        if (Best && ViewCamera)
+        {
+            const FVector To = Best->GetActorLocation() + Up * 30.f - ViewCamera->GetComponentLocation();
+            const FVector Flat = URingFrameUtils::StripVertical(To, Up).GetSafeNormal();
+            if (!Flat.IsNearlyZero()) CachedFacingForward = Flat;
+            CameraPitch = FMath::RadiansToDegrees(FMath::Atan2(FVector::DotProduct(To, Up), URingFrameUtils::StripVertical(To, Up).Size()));
+            if (WeaponComponent && !WeaponComponent->IsFiring()) WeaponComponent->StartFiring();
+        }
+        else if (WeaponComponent && WeaponComponent->IsFiring())
+        {
+            WeaponComponent->StopFiring();
+        }
+        static bool bShot = false;
+        if (!bShot && T > 14.f)
+        {
+            bShot = true;
+            FScreenshotRequest::RequestScreenshot(TEXT("Arena_01_Fight"), true, false);
+        }
+        return;
+    }
+
+    // Stop defending and let them win.
+    if (bGodModeForTesting)
+    {
+        bGodModeForTesting = false;
+        if (WeaponComponent) WeaponComponent->StopFiring();
+        UE_LOG(LogTemp, Warning, TEXT("[TM] ARENA test: stopped defending at %.0f s"), T);
+    }
+    if (T > 75.f)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[TM] ARENA test: nobody reached the player in 45 s - forcing death"));
+        for (TActorIterator<ABaseEnemy> It(GetWorld()); It; ++It)
+        {
+            if (It->IsAlive())
+            {
+                UE_LOG(LogTemp, Warning, TEXT("[TM] ARENA test:   %s at %s, speed %.0f, state %d"), *It->GetName(),
+                    *It->GetActorLocation().ToString(), It->GetVelocity().Size(), static_cast<int32>(It->CurrentState));
+            }
+        }
+        Health = 0.f;
+        HandleDeath();
+    }
 }
 
 void ATMCharacter::OnTriggerSigilPressed()

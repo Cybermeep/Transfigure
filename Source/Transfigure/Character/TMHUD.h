@@ -45,6 +45,8 @@ private:
     void DrawSpellWheel(const ATMCharacter* Char, const FVector2D& Center);
     void DrawSpellbook(ATMCharacter* Char);
     void DrawSpellDetails(const UTransfigurationDefinition* Def, float X, float Y, float W);
+    void DrawRunInfo(const class ACombatWaveDirector* Director);
+    void DrawDeathScreen(const ATMCharacter* Char, const class ACombatWaveDirector* Director);
 
     void DrawCenteredText(const FString& Text, const FVector2D& Pos, const FLinearColor& Color, float Scale = 1.f);
     void DrawLeftText(const FString& Text, float X, float Y, const FLinearColor& Color, float Scale = 1.f);

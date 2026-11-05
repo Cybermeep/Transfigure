@@ -19,6 +19,7 @@
 #include "Ringworld/RingLaunchComponent.h"
 #include "Ringworld/RingLaunchPad.h"
 #include "Ringworld/RingContentStreamer.h"
+#include "Combat/CombatWaveDirector.h"
 
 namespace
 {
@@ -57,6 +58,14 @@ void ATMHUD::DrawHUD()
     ATMCharacter* Char = Cast<ATMCharacter>(GetOwningPawn());
     if (!Char) return;
     const FVector2D Center(Canvas->ClipX * 0.5f, Canvas->ClipY * 0.5f);
+    const ACombatWaveDirector* Director = ACombatWaveDirector::Find(this);
+
+    if (Char->IsDead())
+    {
+        DrawDamagePopups();
+        DrawDeathScreen(Char, Director);
+        return;
+    }
 
     if (Char->IsSpellbookOpen())
     {
@@ -84,6 +93,76 @@ void ATMHUD::DrawHUD()
     DrawPlayerStatus(Char);
     DrawSpellPanel(Char);
     DrawSpeedMeter(Char);
+    if (Director) DrawRunInfo(Director);
+    DrawToasts();
+}
+
+// ── arena run ───────────────────────────────────────────────────────────────
+
+static FString RunClock(float Seconds)
+{
+    const int32 S = FMath::Max(0, FMath::FloorToInt(Seconds));
+    return FString::Printf(TEXT("%d:%02d"), S / 60, S % 60);
+}
+
+void ATMHUD::DrawRunInfo(const ACombatWaveDirector* Director)
+{
+    // Bar at the top: wave, enemies left, time, score.
+    const float CX = Canvas->ClipX * 0.5f;
+    DrawRect(HudPanel, CX - 260.f, 12.f, 520.f, 36.f);
+    const FString Wave = Director->GetWave() > 0 ? FString::Printf(TEXT("WAVE %d"), Director->GetWave()) : FString(TEXT("GET READY"));
+    DrawCenteredText(Wave, FVector2D(CX - 175.f, 30.f), FLinearColor(1.f, 0.78f, 0.45f), 1.1f);
+    if (Director->GetWave() > 0)
+    {
+        DrawCenteredText(FString::Printf(TEXT("%d left"), Director->GetEnemiesLeft()), FVector2D(CX - 55.f, 30.f), HudDim, 1.f);
+    }
+    DrawCenteredText(RunClock(Director->GetRunTime()), FVector2D(CX + 55.f, 30.f), HudDim, 1.f);
+    DrawCenteredText(FText::AsNumber(Director->GetScore()).ToString(), FVector2D(CX + 175.f, 30.f), FLinearColor::White, 1.15f);
+
+    // Countdown to the next wave.
+    const ERunPhase Phase = Director->GetPhase();
+    if (Phase == ERunPhase::Starting || Phase == ERunPhase::Breather)
+    {
+        const int32 Secs = FMath::CeilToInt(Director->GetPhaseTimeLeft());
+        const FString Title = FString::Printf(TEXT("WAVE %d IN %d"), Director->GetWave() + 1, FMath::Max(Secs, 1));
+        DrawCenteredText(Title, FVector2D(CX, Canvas->ClipY * 0.28f), FLinearColor(1.f, 0.85f, 0.55f), 2.2f);
+        if (Phase == ERunPhase::Starting)
+        {
+            DrawCenteredText(TEXT("Survive as long as you can. Mix the gun, spells and movement for a higher score."),
+                FVector2D(CX, Canvas->ClipY * 0.28f + 42.f), HudDim, 0.95f);
+        }
+    }
+}
+
+void ATMHUD::DrawDeathScreen(const ATMCharacter* Char, const ACombatWaveDirector* Director)
+{
+    const float W = Canvas->ClipX, H = Canvas->ClipY;
+    const float Since = static_cast<float>(RealNow() - Char->GetDeathTime());
+    const float Fade = FMath::Clamp(Since / 0.8f, 0.f, 1.f);
+    DrawRect(FLinearColor(0.1f, 0.f, 0.01f, 0.62f * Fade), 0.f, 0.f, W, H);
+
+    float Y = H * 0.3f;
+    DrawCenteredText(TEXT("YOU DIED"), FVector2D(W * 0.5f, Y), FLinearColor(1.f, 0.3f, 0.25f, Fade), 3.2f);
+    Y += 80.f;
+    if (Director)
+    {
+        DrawCenteredText(FString::Printf(TEXT("Wave %d      %d kills      %s"), Director->GetWave(), Director->GetKills(),
+            *RunClock(Director->GetRunTime())), FVector2D(W * 0.5f, Y), FLinearColor(1.f, 1.f, 1.f, Fade), 1.3f);
+        Y += 44.f;
+        DrawCenteredText(FString::Printf(TEXT("Score %s"), *FText::AsNumber(Director->GetScore()).ToString()),
+            FVector2D(W * 0.5f, Y), FLinearColor(1.f, 0.85f, 0.4f, Fade), 1.8f);
+        Y += 44.f;
+        const FString Best = Director->IsNewBest() ? FString(TEXT("NEW BEST!"))
+            : FString::Printf(TEXT("Best %s"), *FText::AsNumber(Director->GetBestScore()).ToString());
+        DrawCenteredText(Best, FVector2D(W * 0.5f, Y), Director->IsNewBest() ? FLinearColor(0.5f, 1.f, 0.6f, Fade) : FLinearColor(0.75f, 0.78f, 0.85f, Fade), 1.1f);
+        Y += 40.f;
+    }
+    if (Since > 1.2f)
+    {
+        const float Pulse = 0.65f + 0.35f * FMath::Sin(static_cast<float>(RealNow()) * 4.f);
+        DrawCenteredText(TEXT("Click, Space or R to restart"), FVector2D(W * 0.5f, FMath::Max(Y + 30.f, H * 0.68f)),
+            FLinearColor(1.f, 1.f, 1.f, Pulse), 1.2f);
+    }
     DrawToasts();
 }
 
