@@ -20,6 +20,12 @@ public:
     /** Point on the part's spine at t in [0,1] (part-local space). */
     static FVector SpinePoint(const FLimbShape& Shape, float T);
 
+    /** Spine direction at t. */
+    static FVector SpineDirection(const FLimbShape& Shape, float T);
+
+    /** Average surface radius at t (no noise), for placing growths on the surface. */
+    static float RadiusAt(const FLimbShape& Shape, float T);
+
     /** Roll a shape for a spec: bone-local start/end plus seeded mutations. */
     static FLimbShape MakeShape(const FLimbPartSpec& Spec, const FVector& LocalStart, const FVector& LocalEnd,
         const FLimbMutationRanges& Ranges, float BodyFatness, FRandomStream& Rng);

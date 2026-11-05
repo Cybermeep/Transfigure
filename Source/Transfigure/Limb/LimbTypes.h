@@ -111,10 +111,114 @@ struct FLimbShape
     float Bulge = 0.f;
     float Lumpiness = 0.f;
     int32 NoiseSeed = 0;
-    int32 Rings = 12;
-    int32 Sides = 12;
+    int32 Rings = 16;
+    int32 Sides = 14;
 
-    float MaxRadius() const { return FMath::Max(StartRadius, EndRadius) + FMath::Max(Bulge, 0.f) + Lumpiness; }
+    /** Cross-section scale along WideAxis (Width) and across it (Depth): torsos are wider than deep. */
+    float Width = 1.f;
+    float Depth = 1.f;
+    /** Part-local direction the Width runs along. Zero = no preference. */
+    FVector WideAxis = FVector::ZeroVector;
+
+    /** Where along the part (0..1) the muscle/belly bulge peaks. */
+    float BulgeCenter = 0.5f;
+    /** How much the part narrows just inside each joint (0..0.4). */
+    float Pinch = 0.f;
+    /** End-cap roundness: ~0.35 rounded, ~0.05 flat. */
+    float CapExponent = 0.35f;
+
+    /** Hard-edged machine part: few sides, ribbed segments, no lumps. */
+    bool bMechanical = false;
+    int32 Segments = 3;
+
+    float MaxRadius() const
+    {
+        return (FMath::Max(StartRadius, EndRadius) + FMath::Max(Bulge, 0.f) + Lumpiness) * FMath::Max(Width, Depth)
+            * (bMechanical ? 1.15f : 1.f);
+    }
+};
+
+/** A body form. Each spawn picks one (by Weight) and then mutates it. */
+USTRUCT(BlueprintType)
+struct FZombieArchetype
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype")
+    FName Name = TEXT("Husk");
+
+    /** Relative chance of being picked. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype")
+    float Weight = 1.f;
+
+    /** Uniform scale of the whole body (skeleton, parts and capsule). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Proportions")
+    float BodyScale = 1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Proportions")
+    float TorsoThickness = 1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Proportions")
+    float ArmThickness = 1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Proportions")
+    float LegThickness = 1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Proportions")
+    float HeadScale = 1.f;
+
+    /** Extra length on the forearms (cm): long blade-like arms. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Proportions")
+    float ForearmExtraLength = 0.f;
+
+    /** Forearm tip radius multiplier (below 1 tapers to a point). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Proportions")
+    float ForearmTipScale = 1.f;
+
+    /** Extra torso bulge (cm) for a swollen gut. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Proportions")
+    float Belly = 0.f;
+
+    /** Chance one arm is massively swollen, and how much. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Proportions")
+    float BigArmChance = 0.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Proportions")
+    float BigArmScale = 1.8f;
+
+    /** Number of fleshy sacs bulging from the body (min, max). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Growths")
+    FIntPoint GrowthCount = FIntPoint(1, 3);
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Growths")
+    FVector2D GrowthRadius = FVector2D(3.f, 7.f);
+
+    /** Number of dangling tendrils from the shoulders/back (min, max). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Growths")
+    FIntPoint TendrilCount = FIntPoint(0, 2);
+
+    /** Chance this corpse was "stuffed" by a robot: 1-2 machine limbs plus torso plates. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Machine")
+    float RobotChance = 0.3f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Stats")
+    float WalkSpeed = 250.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Stats")
+    float HealthMultiplier = 1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Stats")
+    float PartHealthMultiplier = 1.f;
+
+    /** Skin colour ranges, HSV (hue in degrees). Purple flesh by default. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Colour")
+    FVector2D SkinHue = FVector2D(265.f, 290.f);
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Colour")
+    FVector2D SkinSaturation = FVector2D(0.25f, 0.45f);
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Archetype|Colour")
+    FVector2D SkinValue = FVector2D(0.28f, 0.42f);
 };
 
 /** Generated triangle mesh ready for UProceduralMeshComponent. */

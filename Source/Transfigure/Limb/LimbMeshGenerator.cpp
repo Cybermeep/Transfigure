@@ -17,16 +17,48 @@ static FVector SpineTangent(const FLimbShape& S, float T)
     return D.GetSafeNormal(KINDA_SMALL_NUMBER, (S.End - S.Start).GetSafeNormal());
 }
 
+FVector FLimbMeshGenerator::SpineDirection(const FLimbShape& S, float T)
+{
+    return SpineTangent(S, T);
+}
+
+/** Radius profile without noise or cap: taper + off-centre bulge, pinched at the joints, ribbed if mechanical. */
+static float ProfileRadius(const FLimbShape& S, float T)
+{
+    float R = FMath::Lerp(S.StartRadius, S.EndRadius, T);
+    if (S.bMechanical)
+    {
+        // Ribbed piston segments: a raised collar at each segment boundary.
+        const float F = FMath::Frac(T * FMath::Max(S.Segments, 1));
+        return R * ((F < 0.12f || F > 0.88f) ? 1.15f : 1.f);
+    }
+    const float B = (T - S.BulgeCenter) / 0.28f;
+    R += S.Bulge * FMath::Exp(-B * B);
+    const float PinchA = FMath::Exp(-FMath::Square(T / 0.12f));
+    const float PinchB = FMath::Exp(-FMath::Square((1.f - T) / 0.12f));
+    return R * (1.f - S.Pinch * (PinchA + PinchB));
+}
+
+float FLimbMeshGenerator::RadiusAt(const FLimbShape& S, float T)
+{
+    return ProfileRadius(S, T) * 0.5f * (S.Width + S.Depth);
+}
+
 void FLimbMeshGenerator::BuildTube(const FLimbShape& S, FLimbMesh& Out)
 {
     Out = FLimbMesh();
-    const int32 Rings = FMath::Max(S.Rings, 3);
-    const int32 Sides = FMath::Max(S.Sides, 3);
+    const int32 Rings = FMath::Max(S.bMechanical ? S.Segments * 6 : S.Rings, 3);
+    const int32 Sides = FMath::Max(S.bMechanical ? 6 : S.Sides, 3);
     const FVector SeedOffset(S.NoiseSeed * 0.731f, S.NoiseSeed * 1.317f, S.NoiseSeed * 0.193f);
 
     // Start frame: any vector perpendicular to the first tangent.
     FVector Tangent = SpineTangent(S, 0.f);
-    FVector Normal = FVector::CrossProduct(Tangent, FMath::Abs(Tangent.Z) < 0.9f ? FVector::UpVector : FVector::RightVector).GetSafeNormal();
+    // Start frame: aligned with WideAxis if given (so "Width" runs left-right on a torso).
+    FVector Normal = FVector::VectorPlaneProject(S.WideAxis, Tangent).GetSafeNormal();
+    if (Normal.IsNearlyZero())
+    {
+        Normal = FVector::CrossProduct(Tangent, FMath::Abs(Tangent.Z) < 0.9f ? FVector::UpVector : FVector::RightVector).GetSafeNormal();
+    }
 
     for (int32 R = 0; R <= Rings; ++R)
     {
@@ -40,21 +72,21 @@ void FLimbMeshGenerator::BuildTube(const FLimbShape& S, FLimbMesh& Out)
         Tangent = NewTangent;
         const FVector Binormal = FVector::CrossProduct(Tangent, Normal);
 
-        // Rounded ends: radius goes to 0 at t=0 and t=1 with a blunt profile.
-        const float Cap = FMath::Pow(FMath::Sin(PI * T), 0.35f);
-        const float BaseRadius = FMath::Lerp(S.StartRadius, S.EndRadius, T) + S.Bulge * FMath::Sin(PI * T);
+        // Closed ends: radius goes to 0 at t=0 and t=1 (CapExponent sets how blunt).
+        const float Cap = FMath::Pow(FMath::Sin(PI * T), S.CapExponent);
+        const float BaseRadius = ProfileRadius(S, T);
 
         for (int32 Side = 0; Side <= Sides; ++Side)   // last column duplicates the first for clean UVs
         {
             const float A = 2.f * PI * (Side % Sides) / Sides;
-            const FVector Dir = Normal * FMath::Cos(A) + Binormal * FMath::Sin(A);
 
             // Seamless noise: sample 3D Perlin on a circle, moving along the spine.
             const FVector NoisePos = FVector(FMath::Cos(A), FMath::Sin(A), T * 3.f) * 1.7f + SeedOffset;
-            const float Lump = S.Lumpiness * FMath::PerlinNoise3D(NoisePos);
+            const float Lump = S.bMechanical ? 0.f : S.Lumpiness * FMath::PerlinNoise3D(NoisePos);
 
             const float Radius = FMath::Max(0.f, (BaseRadius + Lump) * Cap);
-            Out.Vertices.Add(Center + Dir * Radius);
+            const FVector Offset = Normal * (FMath::Cos(A) * S.Width) + Binormal * (FMath::Sin(A) * S.Depth);
+            Out.Vertices.Add(Center + Offset * Radius);
             Out.UVs.Add(FVector2D(static_cast<float>(Side) / Sides, T));
         }
     }
@@ -110,5 +142,9 @@ FLimbShape FLimbMeshGenerator::MakeShape(const FLimbPartSpec& Spec, const FVecto
     // Bend sideways in a random direction perpendicular to the part.
     const FVector Side = FVector::CrossProduct(Axis, Rng.GetUnitVector()).GetSafeNormal();
     S.BendOffset = Side * Length * Rng.FRandRange(M.Bend.X, M.Bend.Y);
+
+    // Anatomy: muscle peaks off-centre, joints pinch in a little.
+    S.BulgeCenter = Rng.FRandRange(0.32f, 0.62f);
+    S.Pinch = Rng.FRandRange(0.06f, 0.16f);
     return S;
 }
