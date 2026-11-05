@@ -108,6 +108,25 @@ FRingCoords URingWorldGeometry::WorldToRing(const FRingWorldSpec& Spec, const FV
     return Out;
 }
 
+bool URingWorldGeometry::RaycastRingSurface(const FRingWorldSpec& Spec, const FVector& Origin, const FVector& Direction,
+    FVector& OutHit, FRingCoords& OutCoords)
+{
+    if (Spec.bFlatWorldForTesting || Spec.Radius <= 0.0) return false;
+    const FVector D = Direction.GetSafeNormal();
+    // Distance from the spin axis (+Y) only depends on X and Z: solve |(O + tD).xz| = R.
+    const double A = D.X * D.X + D.Z * D.Z;
+    if (A < 1e-9) return false;
+    const double B = 2.0 * (Origin.X * D.X + Origin.Z * D.Z);
+    const double C = Origin.X * Origin.X + Origin.Z * Origin.Z - Spec.Radius * Spec.Radius;
+    const double Disc = B * B - 4.0 * A * C;
+    if (Disc < 0.0) return false;
+    const double T = (-B + FMath::Sqrt(Disc)) / (2.0 * A);   // from inside, the surface ahead is the far root
+    if (T <= 0.0) return false;
+    OutHit = Origin + D * T;
+    OutCoords = WorldToRing(Spec, OutHit);
+    return FMath::Abs(OutCoords.Lateral) <= Spec.Width * 0.5;
+}
+
 FVector URingWorldGeometry::GetGravityDirection(const FRingWorldSpec& Spec, const FVector& WorldPos)
 {
 

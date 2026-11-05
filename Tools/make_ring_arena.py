@@ -70,11 +70,9 @@ for actor in subsys.get_all_level_actors():
     actor.set_actor_transform(old.multiply(frame), False, True)
     moved += 1
 
-    # Height fog thickens with world Z, which means nothing on a tilted ring: make it uniform.
-    if isinstance(actor, unreal.ExponentialHeightFog):
-        comp = actor.get_editor_property("component")
-        comp.set_editor_property("fog_height_falloff", 0.0001)
-        log("height fog made uniform")
+    # Height fog is left as authored. It thins with world Z, and at a 20 degree tilt
+    # "up" is still mostly world Z, so looking up at the ring it thins out as normal.
+    # (Making it uniform hid the ring completely. A ring-aware fog is a later job.)
     # Sky atmosphere: put the planet under the arena instead of under the world origin.
     if isinstance(actor, unreal.SkyAtmosphere):
         comp = actor.get_editor_property("sky_atmosphere_component")
@@ -85,6 +83,14 @@ log("moved %d actors onto the ring" % moved)
 band = subsys.spawn_actor_from_class(unreal.RingBandGenerator, unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0))
 band.set_actor_label("RingBand")
 log("added RingBand at the world origin")
+
+# A launch pad 8 m in front of the player start (arena-local), on the floor.
+pad_local = unreal.Transform(location=unreal.Vector(800.0, 0.0, 10.0), rotation=unreal.Rotator(0, 0, 0),
+                             scale=unreal.Vector(1, 1, 1))
+pad_world = pad_local.multiply(frame)
+pad = subsys.spawn_actor_from_class(unreal.RingLaunchPad, pad_world.translation, pad_world.rotation.rotator())
+pad.set_actor_label("LaunchPad")
+log("added LaunchPad in front of the player start")
 
 # KillZ / world bounds are world-Z checks: meaningless on a ring 1,600 km from the origin.
 ws = world.get_world_settings()

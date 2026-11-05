@@ -17,6 +17,7 @@ class UBuffEffectComponent;
 class UGrappleComponent;
 class UWeaponComponent;
 class UCameraComponent;
+class URingLaunchComponent;
 
 UCLASS()
 class TRANSFIGURE_API ATMCharacter : public ACharacter
@@ -170,6 +171,14 @@ public:
      * it was; the leftover roll then eases out over CeilingFlipDuration.
      */
     void SetSurfaceUp(const FVector& NewUp, bool bOverride);
+    /** Same, but the camera turns with the body (used to blend "up" smoothly during a launch flight). */
+    void SetSurfaceUpDirect(const FVector& NewUp, bool bOverride)
+    {
+        bSurfaceUpOverride = bOverride && !NewUp.IsNearlyZero();
+        SurfaceUpOverride = NewUp.GetSafeNormal();
+    }
+    /** Ease facing and camera pitch toward a world point (Rate per second); mouse look still works on top. */
+    void SteerViewToward(const FVector& WorldPoint, float DeltaTime, float Rate);
     FVector GetSurfaceUp() const { return bSurfaceUpOverride ? SurfaceUpOverride : CachedRingUp; }
 
     /** Filled in by the grapple right before it starts a ceiling run. */
@@ -479,6 +488,10 @@ public:
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat")
     TObjectPtr<UWeaponComponent> WeaponComponent;
+
+    /** Ring-world launch pads: aiming at the ring and the flight there. */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Ring World")
+    TObjectPtr<URingLaunchComponent> LaunchComponent;
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Magic")
     TObjectPtr<UBuffEffectComponent> BuffEffects;

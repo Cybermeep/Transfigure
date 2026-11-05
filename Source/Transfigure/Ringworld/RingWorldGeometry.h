@@ -145,6 +145,15 @@ public:
 	UFUNCTION(BlueprintPure, Category = "RingWorld|Transform")
 	static FRingCoords WorldToRing(const FRingWorldSpec& Spec, const FVector& WorldPos);
 
+	/**
+	 * Where a ray from inside the ring meets the ring's inner surface (the band you
+	 * stand on, curving up overhead). False in flat mode, when the ray runs along the
+	 * spin axis, or when it lands off the band (|Lateral| > Width/2, i.e. the rim walls).
+	 */
+	UFUNCTION(BlueprintPure, Category = "RingWorld|Transform")
+	static bool RaycastRingSurface(const FRingWorldSpec& Spec, const FVector& Origin, const FVector& Direction,
+		FVector& OutHit, FRingCoords& OutCoords);
+
 	/** Unit vector pointing "down" (away from the spin axis) at a world position. */
 	UFUNCTION(BlueprintPure, Category = "RingWorld|Transform")
 	static FVector GetGravityDirection(const FRingWorldSpec& Spec, const FVector& WorldPos);

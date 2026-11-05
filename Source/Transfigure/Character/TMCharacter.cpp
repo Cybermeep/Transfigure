@@ -10,6 +10,7 @@
 #include "States/TMState_WallRun.h"
 #include "States/TMState_WallJump.h"
 #include "States/TMState_CeilingRun.h"
+#include "Ringworld/RingLaunchComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
@@ -54,6 +55,8 @@ ATMCharacter::ATMCharacter()
         TEXT("WeaponComponent"));
     BuffEffects = CreateDefaultSubobject<UBuffEffectComponent>(
         TEXT("BuffEffects"));
+    LaunchComponent = CreateDefaultSubobject<URingLaunchComponent>(
+        TEXT("LaunchComponent"));
 }
 
 void ATMCharacter::BeginPlay()
@@ -332,6 +335,22 @@ void ATMCharacter::UpdateMomentumBraking()
     }
 }
 
+void ATMCharacter::SteerViewToward(const FVector& WorldPoint, float DeltaTime, float Rate)
+{
+    const float A = 1.f - FMath::Exp(-Rate * DeltaTime);
+    const FVector Up = GetSurfaceUp();
+    const FVector Eye = ViewCamera ? ViewCamera->GetComponentLocation() : GetActorLocation();
+    const FVector Dir = (WorldPoint - Eye).GetSafeNormal();
+    const FVector Flat = FVector::VectorPlaneProject(Dir, Up).GetSafeNormal();
+    if (!Flat.IsNearlyZero())
+    {
+        CachedFacingForward = (CachedFacingForward + (Flat - CachedFacingForward) * A).GetSafeNormal();
+    }
+    CameraYawOffset = FMath::Lerp(CameraYawOffset, 0.f, A);
+    const float WantPitch = FMath::RadiansToDegrees(FMath::Asin(FMath::Clamp(FVector::DotProduct(Dir, Up), -1.f, 1.f)));
+    CameraPitch = FMath::Clamp(FMath::Lerp(CameraPitch, WantPitch, A), MinCameraPitch, MaxCameraPitch);
+}
+
 float ATMCharacter::GetSpeedFOVAlpha() const
 {
     const float Speed = URingFrameUtils::StripVertical(GetCharacterMovement()->Velocity, CachedRingUp).Size();
@@ -466,6 +485,7 @@ void ATMCharacter::OnJumpPressed()
 {
     UE_LOG(LogTemp, Warning, TEXT("[TM] Jump pressed  State=%s  JumpsRemaining=%d  Grounded=%d"),
         *CurrentStateName, JumpsRemaining, GetCharacterMovement()->IsMovingOnGround() ? 1 : 0);
+    if (LaunchComponent && LaunchComponent->IsFlying()) return;
     if (IsCeilingRunning())
     {
         bCeilingJumpRequested = true;   // the ceiling run decides: hop, or drop if already hopping
@@ -541,6 +561,8 @@ float ATMCharacter::TakeDamage(float DamageAmount, FDamageEvent const& DamageEve
 
 void ATMCharacter::OnFirePressed()
 {
+    // On a launch pad, aiming at the ring: click launches you there instead of shooting.
+    if (LaunchComponent && (LaunchComponent->IsFlying() || LaunchComponent->TryLaunch())) return;
     if (WeaponComponent) WeaponComponent->FireWeapon();
 }
 
@@ -628,6 +650,7 @@ void ATMCharacter::OnGrapplePressed()
 {
     // Tap = boost, hold = anchor, double tap = pull. The grapple sorts out which.
     if (!GrappleComponent) return;
+    if (LaunchComponent && LaunchComponent->IsFlying()) return;
     FHitResult Hit;
     const bool bHit = TraceFromView(Hit, GrappleComponent->MaxGrappleRange);
     UE_LOG(LogTemp, Warning, TEXT("[TM] Tab pressed: %s"), bHit ? *GetNameSafe(Hit.GetActor()) : TEXT("nothing in range"));

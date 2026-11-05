@@ -6,6 +6,7 @@
 #include "Engine/Engine.h"
 #include "Engine/Font.h"
 #include "Misc/App.h"
+#include "Ringworld/RingLaunchComponent.h"
 
 void ATMHUD::DrawHUD()
 {
@@ -29,6 +30,42 @@ void ATMHUD::DrawHUD()
     if (SpeedBorderAlpha > 0.01f)
     {
         DrawSpeedBorder(SpeedBorderAlpha);
+    }
+
+    // Launch pad: mark where on the ring the click would land you.
+    if (const URingLaunchComponent* Launch = Char->LaunchComponent)
+    {
+        const FLinearColor Ice(0.55f, 0.9f, 1.f, 1.f);
+        if (Launch->IsFlying())
+        {
+            DrawCenteredText(FString::Printf(TEXT("IN FLIGHT  -  landing in %.1fs"), Launch->GetFlightTimeLeft()),
+                FVector2D(Center.X, Center.Y + 80.f), Ice, 1.2f);
+        }
+        else if (Launch->GetActivePad())
+        {
+            if (Launch->HasTarget())
+            {
+                const FVector Screen = Project(Launch->GetTarget());
+                FVector CamLoc;
+                FRotator CamRot;
+                GetOwningPlayerController()->GetPlayerViewPoint(CamLoc, CamRot);
+                if (FVector::DotProduct(Launch->GetTarget() - CamLoc, CamRot.Vector()) > 0.f)
+                {
+                    const float S = 14.f;
+                    DrawRect(Ice, Screen.X - S, Screen.Y - 1.5f, S * 2.f, 3.f);
+                    DrawRect(Ice, Screen.X - 1.5f, Screen.Y - S, 3.f, S * 2.f);
+                    DrawRect(FLinearColor(Ice.R, Ice.G, Ice.B, 0.35f), Screen.X - S, Screen.Y - S, S * 2.f, S * 2.f);
+                }
+                DrawCenteredText(FString::Printf(TEXT("LAUNCH  -  %s km  -  click to fly there"),
+                    *FText::AsNumber(FMath::RoundToInt(Launch->GetTargetDistance() / 1e5)).ToString()),
+                    FVector2D(Center.X, Center.Y + 60.f), Ice, 1.2f);
+            }
+            else
+            {
+                DrawCenteredText(TEXT("Launch pad: look up at the ring to pick a landing spot"),
+                    FVector2D(Center.X, Center.Y + 60.f), Ice, 1.1f);
+            }
+        }
     }
 
     // Crosshair: shots, grapples and sigils all aim along the screen centre.

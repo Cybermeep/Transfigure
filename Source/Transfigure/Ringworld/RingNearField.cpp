@@ -3,6 +3,7 @@
 #include "RingNearField.h"
 #include "RingWorldGeometry.h"
 #include "RingWorldSettings.h"
+#include "RingLaunchComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
@@ -35,6 +36,9 @@ void ARingNearField::Tick(float DeltaSeconds)
 
     const APawn* Pawn = UGameplayStatics::GetPlayerPawn(this, 0);
     if (!Pawn) return;
+    // Mid-launch the player crosses thousands of km of empty interior: wait for the landing.
+    const URingLaunchComponent* Launch = Pawn->FindComponentByClass<URingLaunchComponent>();
+    if (Launch && Launch->IsFlying()) return;
 
     const FRingWorldSpec& Spec = URingWorldSettings::GetSpec();
     if (Spec.bFlatWorldForTesting) return;
